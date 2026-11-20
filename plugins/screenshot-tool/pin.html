@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>贴图</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    /* 拖动移动用手动 setBounds 实现（app-region: drag 会吞掉页面所有鼠标事件） */
+    body { cursor: move; user-select: none; }
+    #img {
+      display: block; width: 100vw; height: 100vh;
+      border-radius: 6px;
+      outline: 1px solid rgba(0, 0, 0, 0.45);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      background:
+        conic-gradient(#c8c8c8 25%, #ffffff 0 50%, #c8c8c8 0 75%, #ffffff 0) 0 0 / 16px 16px;
+    }
+    #menu {
+      position: fixed; display: none; z-index: 10;
+      background: rgba(30, 30, 34, 0.97); border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 8px; padding: 4px; min-width: 140px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+      font-family: "Microsoft YaHei", system-ui, sans-serif;
+    }
+    #menu button {
+      display: block; width: 100%; text-align: left; border: none; background: none;
+      color: #eee; font-size: 13px; padding: 7px 12px; border-radius: 5px; cursor: pointer;
+      font-family: inherit;
+    }
+    #menu button:hover { background: rgba(255,255,255,0.12); }
+    #menu .sep { height: 1px; background: rgba(255,255,255,0.12); margin: 4px 6px; }
+    #hint {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      background: rgba(20,20,24,0.85); color: #ddd; font-size: 12px;
+      padding: 6px 14px; border-radius: 8px; pointer-events: none;
+      transition: opacity 0.8s; z-index: 9;
+      font-family: "Microsoft YaHei", system-ui, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <img id="img" draggable="false" />
+  <div id="menu">
+    <button data-act="copy">复制图片</button>
+    <button data-act="save">保存图片…</button>
+    <button data-act="dir">保存到截图目录</button>
+    <div class="sep"></div>
+    <button data-act="actual">实际大小</button>
+    <button data-act="zoomin">放大</button>
+    <button data-act="zoomout">缩小</button>
+    <div class="sep"></div>
+    <button data-act="close-all">关闭全部贴图</button>
+    <button data-act="close">关闭</button>
+  </div>
+  <div id="hint">滚轮缩放 · 拖动移动 · 双击关闭 · 右键菜单</div>
+  <script type="module" src="./pin.js"></script>
+</body>
+</html>
