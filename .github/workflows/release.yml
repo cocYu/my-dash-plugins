@@ -85,6 +85,14 @@ jobs:
             git push origin main
           fi
 
+      - name: 刷新 jsDelivr 缓存
+        # 索引的第三个来源走 jsDelivr，分支缓存 12h；主动清一次，避免回退时拿到旧 sha 导致校验失败
+        continue-on-error: true
+        run: |
+          sleep 10
+          curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/registry.json" || \
+            echo "缓存刷新失败（可忽略，12 小时后自动过期）"
+
       - name: 镜像到 Gitee
         if: env.GITEE_TOKEN != ''
         run: |
