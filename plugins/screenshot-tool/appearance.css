@@ -1,0 +1,7 @@
+.st-output-dialog {box-sizing:border-box;width:min(450px,92vw);max-height:90vh;overflow:auto;padding:20px;border:1px solid #80808060;border-radius:12px;background:Canvas;color:CanvasText;font:14px/1.5 system-ui,sans-serif}
+.st-output-dialog::backdrop {background:#10141995}
+.st-output-dialog h3,.st-output-dialog p {margin:0}.st-output-dialog p {margin:4px 0 12px}
+.st-output-preview {display:grid;place-items:center;height:165px;border-radius:6px;background:repeating-conic-gradient(#bcbfc2 0 25%,#dce0e2 0 50%) 0 0/14px 14px}
+.st-output-preview canvas {position:static;max-width:100%;max-height:165px}
+.st-output-fields,.st-output-dialog footer {display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:16px}
+.st-output-dialog :is(button,select,input) {font:inherit}.st-output-dialog input[type=number] {width:5em}.st-output-dialog footer {justify-content:flex-end}.st-output-dialog button {cursor:pointer;padding:5px 12px}.st-output-dialog button[value=apply] {background:#13665e;color:#fff;border:1px solid #13665e;border-radius:4px}

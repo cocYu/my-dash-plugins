@@ -2,7 +2,13 @@
 // 工具：选择(移动)/画笔/高亮/直线/箭头/矩形/椭圆/文字/步骤序号/马赛克。
 // 撤销重做、选中移动（Delete 删除）、步骤序号自动递增。
 // 所有形状坐标均为底图像素坐标，显示缩放只在交互换算层处理。
+//
+// 分层：createEditorCore() 是框架无关的交互与渲染核心（纯状态 + 命令式 API），
+// createEditor() 是主窗工作台用的 Vue 薄壳（工具栏 UI）；截图遮罩页（overlay.js）
+// 直接驱动核心，保证两处标注行为一致。
 
+import { drawStep, stepBounds, captionBox, stepHint } from './step.js'
+import { appearance, renderOutput } from './shell.js'
 import { canvasBytes } from './history.js'
 
 let shapeSeq = 0
@@ -25,8 +31,9 @@ export const COLORS = ['#e64545', '#f4a300', '#2f9e44', '#1971c2', '#9c36b5', '#
 
 export function createEditorState() {
   return {
-    version: 0, // 手动触发视图重绘/重算（render 里读取以建立依赖）
+    version: 0, // 兼容字段：旧版靠它建立响应依赖，现由 onChange 通知替代
     shapes: [],
+    undo: [],
     redo: [],
     tool: 'pen',
     color: '#e64545',
@@ -37,6 +44,7 @@ export function createEditorState() {
     boundId: null, // 绑定的历史记录 id
     dirty: false,
     nextStep: 1,
+    stepSize: 26, stepText: false, pendingStep: null, appearance: appearance(),
     width: 0,
     height: 0
   }
@@ -82,7 +90,7 @@ function shapeBBox(s) {
       return { x: s.x - 4, y: s.y - 4, w: w + slack, h: h + slack }
     }
     case 'step':
-      return { x: s.x - 20, y: s.y - 20, w: 40, h: 40 }
+      return stepBounds(s)
     default:
       return { x: 0, y: 0, w: 0, h: 0 }
   }
@@ -115,8 +123,10 @@ function translateShape(s, dx, dy) {
       s.x += dx
       s.y += dy
       break
-    case 'text':
     case 'step':
+      if (s.box) { s.box.x += dx; s.box.y += dy; s.tx += dx; s.ty += dy }
+      s.x += dx; s.y += dy; break
+    case 'text':
       s.x += dx
       s.y += dy
       break
@@ -232,22 +242,7 @@ function drawShape(g, s, base, draft = false) {
       lines.forEach((line, i) => g.fillText(line, s.x, s.y + i * s.size * 1.5))
       break
     }
-    case 'step': {
-      const r = 13
-      g.beginPath()
-      g.arc(s.x, s.y, r, 0, Math.PI * 2)
-      g.fillStyle = s.color
-      g.shadowColor = 'rgba(0,0,0,0.3)'
-      g.shadowBlur = 4
-      g.fill()
-      g.shadowBlur = 0
-      g.fillStyle = '#ffffff'
-      g.font = `700 ${r + 2}px system-ui, sans-serif`
-      g.textAlign = 'center'
-      g.textBaseline = 'middle'
-      g.fillText(String(s.n), s.x, s.y + 1)
-      break
-    }
+    case 'step': drawStep(g,s); break
     case 'mosaic':
       if (base) drawMosaicShape(g, base, s)
       break
@@ -291,28 +286,30 @@ export function renderScene(g, base, shapes, selectedId = null) {
   }
 }
 
-// ---- 编辑器组件工厂 ----
+// ---- 框架无关交互核心 ----
 
-export function createEditor(bundle) {
-  const { vue, ui } = bundle
-  const { h, reactive, defineComponent, nextTick, onBeforeUnmount, onMounted } = vue
-  const { ElButton, ElInputNumber, ElSlider, ElTooltip } = ui
-
-  const state = reactive(createEditorState())
-  let baseCanvas = null // HTMLCanvasElement 不进响应式系统，经 load() 更新后 bump
+/**
+ * 创建标注编辑核心。onChange 在任何影响视图/工具栏的状态变化后被调用
+ * （壳层用它触发重渲染；canvas 重绘由核心内部的 rAF 自己完成）。
+ */
+export function createEditorCore({ onChange } = {}) {
+  const state = createEditorState()
+  let baseCanvas = null // HTMLCanvasElement，经 load() 更新
   let canvasEl = null
   let draft = null // 进行中的形状
   let moving = null // { shape, startX, startY }
   let rafPending = false
 
-  const bump = () => {
-    state.version++
+  const notify = () => {
+    if (onChange) onChange()
   }
+  const bump = () => { notify(); scheduleRedraw() }
 
   const redraw = () => {
     if (!canvasEl || !baseCanvas) return
     const g = canvasEl.getContext('2d')
-    const shapes = draft ? [...state.shapes, draft] : state.shapes
+    const transient = draft || state.pendingStep
+    const shapes = transient ? [...state.shapes, transient] : state.shapes
     renderScene(g, baseCanvas, shapes, state.selectedId)
   }
 
@@ -327,11 +324,17 @@ export function createEditor(bundle) {
 
   const toImageCoords = (e) => {
     const rect = canvasEl.getBoundingClientRect()
-    const scale = state.width / rect.width
-    return [(e.clientX - rect.left) * scale, (e.clientY - rect.top) * scale]
+    return [(e.clientX - rect.left) * state.width/rect.width, (e.clientY - rect.top) * state.height/rect.height]
   }
 
+  // 形状数组快照共享不可变的笔迹；移动时仅复制被移动的形状。
+  const checkpoint = () => {
+    state.undo.push(state.shapes.slice())
+    if (state.undo.length > 100) state.undo.shift()
+    state.redo = []
+  }
   const commit = (shape) => {
+    checkpoint()
     state.shapes.push(shape)
     state.redo = []
     state.dirty = true
@@ -346,7 +349,7 @@ export function createEditor(bundle) {
   }
 
   const onPointerDown = (e) => {
-    if (!baseCanvas || state.textEditing) return
+    if (!baseCanvas || state.textEditing || e.button !== 0) return
     e.preventDefault()
     const [x, y] = toImageCoords(e)
     try { canvasEl.setPointerCapture?.(e.pointerId) } catch { /* 合成事件无活动指针 */ }
@@ -360,8 +363,13 @@ export function createEditor(bundle) {
       return
     }
     if (t === 'step') {
-      commit({ ...common, type: 'step', x, y, n: state.nextStep })
-      updateNextStep()
+      const step = { ...common, type: 'step', x, y, n: state.nextStep, diameter:state.stepSize }
+      if (!state.stepText) { commit(step); updateNextStep() }
+      else if (!state.pendingStep) { state.pendingStep = { ...step, tx:x, ty:y }; bump() }
+      else {
+        Object.assign(state.pendingStep, {tx:x,ty:y})
+        state.textEditing = {x,y,value:'',step:true}; bump()
+      }
       return
     }
     if (t === 'text') {
@@ -381,8 +389,17 @@ export function createEditor(bundle) {
 
   const onPointerMove = (e) => {
     if (!baseCanvas) return
+    if (state.pendingStep && !state.textEditing) {
+      const [tx,ty] = toImageCoords(e); Object.assign(state.pendingStep,{tx,ty}); scheduleRedraw(); return
+    }
     if (moving) {
       const [x, y] = toImageCoords(e)
+      if (!moving.moved) {
+        checkpoint()
+        const i = state.shapes.indexOf(moving.shape)
+        moving.shape = structuredClone(moving.shape)
+        state.shapes[i] = moving.shape
+      }
       translateShape(moving.shape, x - moving.startX, y - moving.startY)
       moving.startX = x
       moving.startY = y
@@ -446,9 +463,17 @@ export function createEditor(bundle) {
     }
   }
 
+  /** 提交进行中的文字输入（Enter/失焦时由壳层调用） */
   const commitText = () => {
     const t = state.textEditing
     state.textEditing = null
+    if (t?.step && state.pendingStep) {
+      const step = state.pendingStep; state.pendingStep = null
+      if (!t.value.trim()) { bump(); return }
+      step.text = t.value.trim()
+      step.box = captionBox(canvasEl.getContext('2d'),step,state.width,state.height)
+      commit(step); updateNextStep(); return
+    }
     if (t && t.value.trim()) {
       commit({ id: genShapeId(), type: 'text', x: t.x, y: t.y, text: t.value, color: state.color, size: state.fontSize })
     } else {
@@ -456,28 +481,24 @@ export function createEditor(bundle) {
     }
   }
 
-  const undo = () => {
-    if (!state.shapes.length) return
-    const last = state.shapes.pop()
-    if (state.selectedId === last.id) state.selectedId = null
-    state.redo.push(last)
+  const cancelDraft = () => { state.pendingStep=null; state.textEditing=null; bump() }
+  const selectTool = tool => { state.tool=tool; state.selectedId=null; cancelDraft() }
+  const restore = (from, to) => {
+    if (state.pendingStep) { cancelDraft(); return }
+    if (!from.length) return
+    to.push(state.shapes.slice())
+    state.shapes = from.pop()
+    state.selectedId = null
     state.dirty = true
     updateNextStep()
     bump()
   }
-
-  const redoFn = () => {
-    const shape = state.redo.pop()
-    if (!shape) return
-    state.shapes.push(shape)
-    state.dirty = true
-    updateNextStep()
-    bump()
-  }
+  const undo = () => restore(state.undo, state.redo)
+  const redoFn = () => restore(state.redo, state.undo)
 
   const clearShapes = () => {
     if (!state.shapes.length) return
-    state.redo = []
+    checkpoint()
     state.shapes = []
     state.selectedId = null
     state.dirty = true
@@ -487,6 +508,7 @@ export function createEditor(bundle) {
 
   const removeSelected = () => {
     if (!state.selectedId) return
+    checkpoint()
     state.shapes = state.shapes.filter((s) => s.id !== state.selectedId)
     state.selectedId = null
     state.dirty = true
@@ -504,6 +526,7 @@ export function createEditor(bundle) {
         removeSelected()
       }
     } else if (e.key === 'Escape') {
+      if (state.pendingStep) { cancelDraft(); return }
       state.selectedId = null
       if (state.textEditing) {
         state.textEditing = null
@@ -519,6 +542,105 @@ export function createEditor(bundle) {
     }
   }
 
+  /** 绑定显示画布（尺寸与底图一致；壳层在 DOM 挂载/更新后调用） */
+  const attach = (el) => {
+    canvasEl = el
+    if (el && baseCanvas) {
+      el.width = state.width
+      el.height = state.height
+      redraw()
+    }
+  }
+
+  const detach = () => {
+    canvasEl = null
+  }
+
+  /** 载入底图（清空标注）；canvasEl 已绑定时立即重绘 */
+  const load = (canvas, meta = {}) => {
+    baseCanvas = canvas
+    state.width = canvas.width
+    state.height = canvas.height
+    state.appearance = appearance(meta.appearance)
+    state.pendingStep = null
+    state.shapes = []
+    state.undo = []
+    state.redo = []
+    state.selectedId = null
+    state.textEditing = null
+    state.dirty = false
+    state.boundId = meta.boundId ?? null
+    draft = null
+    moving = null
+    updateNextStep()
+    bump()
+    if (canvasEl) {
+      canvasEl.width = canvas.width
+      canvasEl.height = canvas.height
+      redraw()
+    }
+  }
+
+  const exportScene = () => {
+    if (!baseCanvas) return null
+    const out = document.createElement('canvas')
+    out.width = state.width
+    out.height = state.height
+    renderScene(out.getContext('2d'), baseCanvas, state.shapes, null)
+    return out
+  }
+
+  const exportCanvas = () => {
+    const scene = exportScene()
+    return scene && renderOutput(scene,state.appearance)
+  }
+  const setAppearance = value => { state.appearance=appearance(value); state.dirty=true; bump() }
+  const exportBytes = async () => {
+    const canvas = exportCanvas()
+    return canvas ? await canvasBytes(canvas) : null
+  }
+
+  return {
+    state,
+    attach,
+    detach,
+    load,
+    redraw,
+    scheduleRedraw,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onKeydown,
+    undo,
+    redo: redoFn,
+    clearShapes,
+    removeSelected,
+    commitText, cancelDraft, selectTool, setAppearance, exportScene,
+    exportCanvas,
+    exportBytes,
+    get isEmpty() {
+      return !baseCanvas
+    },
+    get isDirty() {
+      return state.dirty
+    },
+    get boundId() {
+      return state.boundId
+    }
+  }
+}
+
+// ---- Vue 薄壳（主窗工作台用） ----
+
+export function createEditor(bundle) {
+  const { vue, ui } = bundle
+  const { h, ref, defineComponent, nextTick, onBeforeUnmount } = vue
+  const { ElButton, ElInputNumber, ElSlider, ElTooltip } = ui
+
+  const version = ref(0)
+  const trigger = () => { version.value++ }
+  const core = createEditorCore({ onChange: () => trigger() })
+
   const toolBtn = (t) =>
     h(
       ElTooltip,
@@ -528,11 +650,10 @@ export function createEditor(bundle) {
           h(
             'button',
             {
-              class: ['st-ed-tool', state.tool === t.id ? 'is-active' : ''],
+              'aria-label': t.name, 'aria-pressed': core.state.tool === t.id,
+              class: ['st-ed-tool', core.state.tool === t.id ? 'is-active' : ''],
               onClick: () => {
-                state.tool = t.id
-                state.selectedId = null
-                bump()
+                core.selectTool(t.id)
               }
             },
             t.glyph
@@ -544,24 +665,17 @@ export function createEditor(bundle) {
     name: 'ScreenshotEditor',
     setup() {
       // 生命周期必须在 setup() 内注册（工厂函数体里没有组件实例）
-      onMounted(() => {
-        window.addEventListener('keydown', onKeydown)
-      })
       onBeforeUnmount(() => {
-        window.removeEventListener('keydown', onKeydown)
+        core.detach()
       })
       const setCanvas = (el) => {
-        canvasEl = el
-        if (el && baseCanvas) {
-          el.width = state.width
-          el.height = state.height
-          redraw()
-        }
+        core.attach(el)
       }
       return () => {
-        void state.version // 建立依赖：命令式变更后触发重渲染
-        const hasBase = !!baseCanvas
-        return h('div', { class: 'st-editor' }, [
+        void version.value // 命令式变更后触发重渲染
+        const s = core.state
+        const hasBase = !core.isEmpty
+        return h('div', { class: 'st-editor', onKeydown:core.onKeydown }, [
           // 工具栏
           h('div', { class: 'st-ed-bar' }, [
             h('div', { class: 'st-ed-tools' }, TOOLS.map(toolBtn)),
@@ -572,11 +686,11 @@ export function createEditor(bundle) {
               { class: 'st-ed-colors' },
               COLORS.map((c) =>
                 h('button', {
-                  class: ['st-ed-color', state.color === c ? 'is-active' : ''],
+                  class: ['st-ed-color', s.color === c ? 'is-active' : ''],
                   style: `background:${c}`,
                   onClick: () => {
-                    state.color = c
-                    bump()
+                    s.color = c
+                    trigger()
                   },
                   title: c
                 })
@@ -584,25 +698,25 @@ export function createEditor(bundle) {
                 h('input', {
                   type: 'color',
                   class: 'st-ed-color-custom',
-                  value: state.color,
+                  value: s.color,
                   onInput: (e) => {
-                    state.color = e.target.value
-                    bump()
+                    s.color = e.target.value
+                    trigger()
                   }
                 })
               ])
             ),
             h('div', { class: 'st-ed-sep' }),
-            h('span', { class: 'st-ed-label' }, '粗细'),
+            ...(s.tool !== 'step' ? [h('span', { class: 'st-ed-label' }, '粗细'),
             h(ElSlider, {
               class: 'st-ed-size',
               min: 1,
               max: 20,
               step: 1,
-              modelValue: state.size,
+              modelValue: s.size,
               'onUpdate:modelValue': (v) => {
-                state.size = v
-                bump()
+                s.size = v
+                trigger()
               }
             }),
             h('span', { class: 'st-ed-label' }, '字号'),
@@ -611,21 +725,25 @@ export function createEditor(bundle) {
               size: 'small',
               min: 12,
               max: 64,
-              modelValue: state.fontSize,
+              modelValue: s.fontSize,
               'onUpdate:modelValue': (v) => {
-                state.fontSize = v
-                bump()
+                s.fontSize = v
+                trigger()
               }
             }),
+            ] : [
+              h('label',{},['编号直径 ',h('input',{type:'number',min:12,max:128,value:s.stepSize,'aria-label':'编号直径',onChange:e=>{s.stepSize=Math.max(12,Math.min(128,Number(e.target.value)||26));e.target.value=s.stepSize;trigger()}}),' px']),
+              h('label',{},[h('input',{type:'checkbox',checked:s.stepText,onChange:e=>{s.stepText=e.target.checked;core.cancelDraft()}}),' 附带文字']),
+              h('span',{class:'st-hint',role:'status'},stepHint(s))]),
             h('div', { class: 'st-ed-sep' }),
-            h(ElButton, { size: 'small', disabled: !state.shapes.length, onClick: undo }, () => '撤销'),
-            h(ElButton, { size: 'small', disabled: !state.redo.length, onClick: redoFn }, () => '重做'),
+            h(ElButton, { size: 'small', disabled: !s.undo.length, onClick: core.undo }, () => '撤销'),
+            h(ElButton, { size: 'small', disabled: !s.redo.length, onClick: core.redo }, () => '重做'),
             h(
               ElButton,
-              { size: 'small', type: 'danger', plain: true, disabled: !state.selectedId, onClick: removeSelected },
+              { size: 'small', type: 'danger', plain: true, disabled: !s.selectedId, onClick: core.removeSelected },
               () => '删除选中'
             ),
-            h(ElButton, { size: 'small', disabled: !state.shapes.length, onClick: clearShapes }, () => '清空标注')
+            h(ElButton, { size: 'small', disabled: !s.shapes.length, onClick: core.clearShapes }, () => '清空标注')
           ]),
           // 画布区
           h(
@@ -639,27 +757,33 @@ export function createEditor(bundle) {
                     h('canvas', {
                       ref: setCanvas,
                       class: 'st-ed-canvas',
-                      onMousedown: onPointerDown,
-                      onMousemove: onPointerMove,
-                      onMouseup: onPointerUp,
-                      onMouseleave: onPointerUp
+                      tabindex: 0, 'aria-label': '标注画布',
+                      onPointerdown: e => { e.currentTarget.focus({preventScroll:true}); core.onPointerDown(e) },
+                      onPointermove: core.onPointerMove,
+                      onPointerup: core.onPointerUp,
+                      onPointercancel: core.onPointerUp
                     }),
-                    state.textEditing
-                      ? h('div', { class: 'st-ed-textbox', style: textEditorStyle() }, [
+                    s.textEditing
+                      ? h('div', { class: 'st-ed-textbox', style: textEditorStyle(s) }, [
                           h('input', {
                             class: 'st-ed-text-input',
-                            autofocus: true,
+                            onVnodeMounted: vnode => vnode.el.focus({preventScroll:true}),
+                            'aria-label': s.textEditing.step ? '步骤说明' : '标注文字',
                             placeholder: '输入文字，Enter 确认',
-                            value: state.textEditing.value,
-                            onInput: (e) => (state.textEditing.value = e.target.value),
+                            value: s.textEditing.value,
+                            onInput: (e) => (s.textEditing.value = e.target.value),
                             onKeydown: (e) => {
-                              if (e.key === 'Enter') commitText()
+                              if (e.isComposing || e.keyCode === 229) return
+                              if (e.key === 'Enter') {
+                                e.stopPropagation()
+                                core.commitText()
+                              }
                               if (e.key === 'Escape') {
-                                state.textEditing = null
-                                bump()
+                                e.stopPropagation()
+                                core.cancelDraft()
                               }
                             },
-                            onBlur: commitText
+                            onBlur: core.commitText
                           })
                         ])
                       : null
@@ -672,65 +796,35 @@ export function createEditor(bundle) {
     }
   })
 
-  function textEditorStyle() {
-    const t = state.textEditing
-    const leftPct = state.width ? (t.x / state.width) * 100 : 0
-    const topPct = state.height ? (t.y / state.height) * 100 : 0
-    return `left:${leftPct}%;top:${topPct}%`
+  function textEditorStyle(s) {
+    const t = s.textEditing
+    const leftPct = s.width ? (t.x / s.width) * 100 : 0
+    const topPct = s.height ? (t.y / s.height) * 100 : 0
+    return `left:clamp(0px,${leftPct}%,max(0px,100% - 150px));top:${topPct}%`
   }
 
-  // ---- 对外命令式句柄 ----
-
-  const load = (canvas, meta = {}) => {
-    baseCanvas = canvas
-    state.width = canvas.width
-    state.height = canvas.height
-    state.shapes = []
-    state.redo = []
-    state.selectedId = null
-    state.textEditing = null
-    state.dirty = false
-    state.boundId = meta.boundId ?? null
-    draft = null
-    moving = null
-    updateNextStep()
-    bump()
-    if (canvasEl) {
-      canvasEl.width = canvas.width
-      canvasEl.height = canvas.height
-      nextTick(redraw)
-    }
-  }
-
-  const exportCanvas = () => {
-    if (!baseCanvas) return null
-    const out = document.createElement('canvas')
-    out.width = state.width
-    out.height = state.height
-    renderScene(out.getContext('2d'), baseCanvas, state.shapes, null)
-    return out
-  }
-
-  const exportBytes = async () => {
-    const canvas = exportCanvas()
-    return canvas ? await canvasBytes(canvas) : null
-  }
+  // ---- 对外命令式句柄（与旧版签名一致，workspace 无需改动） ----
 
   return {
-    state,
+    version,
+    state: core.state,
     component,
-    load,
-    exportCanvas,
-    exportBytes,
-    redraw,
+    load: (canvas, meta = {}) => {
+      core.load(canvas, meta)
+      nextTick(() => core.redraw())
+    },
+    setAppearance: core.setAppearance, exportScene: core.exportScene,
+    exportCanvas: () => core.exportCanvas(),
+    exportBytes: () => core.exportBytes(),
+    redraw: () => core.redraw(),
     get isEmpty() {
-      return !baseCanvas
+      return core.isEmpty
     },
     get isDirty() {
-      return state.dirty
+      return core.isDirty
     },
     get boundId() {
-      return state.boundId
+      return core.boundId
     }
   }
 }

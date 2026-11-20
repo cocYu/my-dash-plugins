@@ -1,31 +1,89 @@
 <!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <title>区域截图</title>
+  <link rel="stylesheet" href="./appearance.css">
+
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
     body { background: #111; }
-    #freeze, #ui {
+    #freeze, #ui, #anno {
       position: fixed; inset: 0; width: 100vw; height: 100vh;
       display: none;
     }
     body.ready #freeze { display: block; }
     body.ready #ui { display: block; cursor: crosshair; }
-    #toolbar {
-      position: fixed; display: none; gap: 6px; z-index: 10;
-      background: rgba(30, 30, 34, 0.95); border: 1px solid rgba(255,255,255,0.15);
+    body.editing #ui { cursor: default; }
+    #anno {
+      inset: auto; display: none; z-index: 5;
+      cursor: crosshair; background: transparent;
+    }
+    body.editing #anno { display: block; }
+    .bar {
+      position: fixed; display: none; z-index: 10;
+      background: rgba(30, 30, 34, 0.96); border: 1px solid rgba(255,255,255,0.15);
       border-radius: 8px; padding: 6px 8px;
       font-family: "Microsoft YaHei", system-ui, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      color: #ddd; user-select: none;
     }
-    #toolbar button {
-      border: none; border-radius: 6px; padding: 6px 14px; font-size: 13px;
+    .bar button {
+      border: none; border-radius: 6px; font-size: 13px; line-height: 1;
       cursor: pointer; font-family: inherit;
+      background: #3c3d42; color: #ddd; padding: 7px 12px;
     }
+    .bar button:hover { background: #4a4b52; }
+    .bar button.primary { background: #1971c2; color: #fff; }
+    .bar button.success { background: #2f9e44; color: #fff; }
+    .bar button.danger { background: #5c2b2b; color: #ffb4b4; }
+    .bar button:disabled { opacity: 0.4; cursor: default; }
+    .bar button:disabled:hover { background: #3c3d42; }
+    #toolbar { gap: 6px; }
     #btn-ok { background: #1971c2; color: #fff; }
     #btn-cancel { background: #3c3d42; color: #ddd; }
     #btn-full { background: #2f9e44; color: #fff; }
+    #editbar { flex-direction: column; gap: 6px; max-width: 860px; }
+    .eb-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .eb-sep { width: 1px; height: 18px; background: rgba(255,255,255,0.18); margin: 0 4px; }
+    .eb-tool {
+      width: 30px; padding: 7px 0 !important; text-align: center; font-size: 14px !important;
+    }
+    .eb-tool.is-active { background: #1971c2 !important; color: #fff !important; }
+    .eb-color {
+      width: 18px; height: 18px; border-radius: 4px; padding: 0 !important;
+      border: 2px solid transparent; box-sizing: border-box;
+    }
+    .eb-color.is-active { border-color: #fff; }
+    .eb-color-custom { width: 22px; height: 22px; padding: 0; border: none; background: none; cursor: pointer; }
+    .eb-label { font-size: 12px; color: #999; margin: 0 2px 0 6px; }
+    #eb-size { width: 70px; accent-color: #1971c2; }
+    #eb-font { width: 44px; background: #232327; border: 1px solid rgba(255,255,255,0.15); color: #ddd;
+      border-radius: 4px; padding: 4px 4px; font-size: 12px; font-family: inherit; }
+    #panel {
+      position: fixed; right: 16px; bottom: 16px; z-index: 20; display: none;
+      width: 380px; max-height: 60vh; flex-direction: column; gap: 8px;
+    }
+    #panel.show { display: flex; }
+    #panel-title { font-size: 13px; font-weight: 600; color: #eee; }
+    #panel textarea {
+      width: 100%; box-sizing: border-box; background: #232327; color: #ddd;
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+      font-family: inherit; font-size: 13px; line-height: 1.6; padding: 8px;
+      resize: vertical;
+    }
+    #panel-ocr { min-height: 90px; }
+    #panel-translate { min-height: 60px; display: none; }
+    #panel-tr-row { display: none; flex-direction: column; gap: 4px; }
+    #panel-tr-row.show { display: flex; }
+    #panel .tr-label { font-size: 12px; color: #999; }
+    #toast {
+      position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
+      background: rgba(20,20,24,0.95); color: #eee; font-size: 13px;
+      padding: 8px 18px; border-radius: 8px; z-index: 30; display: none;
+      font-family: "Microsoft YaHei", system-ui, sans-serif;
+      max-width: 80vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
     #tip {
       position: fixed; left: 50%; top: 24px; transform: translateX(-50%);
       background: rgba(30,30,34,0.92); color: #eee; font-size: 13px;
@@ -33,17 +91,75 @@
       font-family: "Microsoft YaHei", system-ui, sans-serif;
       pointer-events: none;
     }
+    #textbox {
+      position: fixed; display: none; z-index: 8;
+    }
+    #textbox input {
+      background: rgba(20,20,24,0.85); color: #fff; border: 1px dashed #1971c2;
+      border-radius: 4px; padding: 4px 6px; font-size: 16px; outline: none; min-width: 120px;
+    }
+  body.ready:not(.editing) #toolbar {display:flex;top:14px;right:14px}
+    #editbar {width:max-content;max-width:calc(100vw - 32px)}
+    .bar button:focus-visible {outline:2px solid #78e0d3;outline-offset:2px}
+    #panel {max-width:calc(100vw - 48px);overflow:auto}
+    #panel-tr-row.show #panel-translate {display:block}
+    #anno, #ui {touch-action:none}
+    #selection-size {font:600 13px ui-monospace,monospace;color:#90e4d1}
+    #step-options:not([hidden]) {display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}
+    #step-size {width:4em}
+    #geometry:not([hidden]) {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    #geometry input {width:5em;background:#22252a;color:white;border:1px solid #6b737d;border-radius:4px;padding:4px}
+    #tip {max-width:50vw;text-align:center}
   </style>
 </head>
 <body>
   <canvas id="freeze"></canvas>
   <canvas id="ui"></canvas>
-  <div id="tip">拖动选择截取区域 · Enter 确认 · Esc 取消 · 双击全屏</div>
-  <div id="toolbar">
-    <button id="btn-ok">截取</button>
+  <canvas id="anno"></canvas>
+  <div id="textbox"><input id="text-input" placeholder="输入文字，Enter 确认" /></div>
+  <div id="tip" role="status">拖动选择截取区域 · Esc 取消 · 双击全屏</div>
+  <div id="toolbar" class="bar">
     <button id="btn-full">全屏</button>
     <button id="btn-cancel">取消</button>
   </div>
+  <div id="editbar" class="bar">
+    <div class="eb-row"><strong id="selection-size"></strong><button id="eb-output">截图外观…</button><button id="adjust" aria-expanded="false" aria-controls="geometry">微调选区</button><small>开始标注前可调整位置与大小</small></div>
+    <form id="geometry" hidden>
+      <label>左 <input name="x" type="number" min="0" required></label><label>上 <input name="y" type="number" min="0" required></label>
+      <label>宽 <input name="w" type="number" min="6" required></label><label>高 <input name="h" type="number" min="6" required></label>
+      <button>应用</button>
+    </form>
+    <div class="eb-row" id="eb-tools"></div>
+    <div id="step-options" hidden><label>编号直径 <input id="step-size" type="number" min="12" max="128" value="26"> px</label>
+      <label><input id="step-text" type="checkbox"> 附带文字</label> <span id="step-hint" role="status"></span></div>
+    <div class="eb-row">
+      <button id="eb-copy" class="success" title="复制到剪贴板并关闭（Enter）">复制</button>
+      <button id="eb-save" title="保存到设置目录（未设置则弹另存）">保存</button>
+      <button id="eb-pin" title="钉成置顶贴图">贴图</button>
+      <span class="eb-sep"></span>
+      <button id="eb-ocr" title="提取图中文字（未配置 AI 时用本地识别）">提取文字</button>
+      <button id="eb-recognize" title="AI 描述截图内容">AI 识图</button>
+      <span class="eb-sep"></span>
+      <button id="eb-longshot" title="以此选区开始滚动长截图">滚动长截图</button>
+      <span class="eb-sep"></span>
+      <button id="eb-reselect" title="重新框选">重新框选</button>
+      <button id="eb-cancel" class="danger" title="放弃本次截图（Esc）">取消</button>
+    </div>
+  </div>
+  <div id="panel" class="bar">
+    <div id="panel-title">OCR 文字</div>
+    <textarea id="panel-ocr" spellcheck="false"></textarea>
+    <div id="panel-tr-row">
+      <span class="tr-label" id="panel-tr-label">翻译结果</span>
+      <textarea id="panel-translate" spellcheck="false"></textarea>
+    </div>
+    <div class="eb-row">
+      <button id="panel-copy" class="success">复制</button>
+      <button id="panel-translate-btn">翻译</button>
+      <button id="panel-close">关闭</button>
+    </div>
+  </div>
+  <div id="toast" role="status"></div>
   <script type="module" src="./overlay.js"></script>
 </body>
 </html>

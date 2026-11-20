@@ -6,7 +6,7 @@ const TESSERACT_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tess
 let modPromise = null
 
 function loadModule() {
-  if (!modPromise) modPromise = import(/* @vite-ignore */ TESSERACT_CDN)
+  if (!modPromise) modPromise = import(/* @vite-ignore */ TESSERACT_CDN).catch(err => { modPromise = null; throw err })
   return modPromise
 }
 
@@ -15,7 +15,9 @@ function loadModule() {
  * @returns {{ text: string }}
  */
 export async function ocrLocal({ imageDataUrl, langs = 'chi_sim+eng', onProgress }) {
-  const { createWorker } = await loadModule()
+  const mod = await loadModule()
+  const createWorker = mod.createWorker ?? mod.default?.createWorker
+  if (!createWorker) throw new Error('本地 OCR 引擎未能加载，请检查网络后重试')
   const worker = await createWorker(langs, 1, {
     logger: (m) => {
       if (onProgress && typeof m?.progress === 'number') onProgress(m.progress, m.status)

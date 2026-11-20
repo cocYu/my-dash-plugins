@@ -1,4 +1,8 @@
-// 截图工作台：捕获入口（区域/全屏/窗口/长图/粘贴）+ 标注编辑器 + AI 面板 + 历史与设置。
+import { settingsView } from './settings.js'
+import { captureDesk } from './capture-desk.js'
+// 截图工作台：捕获入口（区域/全屏/窗口/粘贴）+ 标注编辑器（历史二次编辑）+ AI 面板 + 历史与设置。
+// 区域截图/长截图的「就地编辑」在遮罩窗与长截图控制条内完成（overlay.js / longshot-bar.js），
+// 本组件只负责：发起捕获、接收结果记历史、历史管理与二次编辑、全部插件配置。
 // 组件树都在本文件组装，库函数见 lib/*。UI 组件从 bundle.ui 取，Vue API 从 bundle.vue 取。
 
 import * as capture from '../lib/capture.js'
@@ -7,16 +11,35 @@ import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../lib/store.js'
 import * as ai from '../lib/ai.js'
 import { ocrLocal } from '../lib/ocr.js'
 import { pinCanvas, pinDataUrl } from '../lib/pin.js'
-import { createStitcher } from '../lib/stitch.js'
-import { applyShell, SHELLS } from '../lib/shell.js'
+import { chooseAppearance } from '../lib/appearance-dialog.js'
 import { createEditor } from '../lib/editor.js'
 
-const SOURCE_LABEL = { region: '区域', screen: '全屏', window: '窗口', long: '长图', paste: '粘贴', edit: '编辑' }
+const SOURCE_LABEL = { region: '区域', screen: '全屏', window: '窗口', long: '长图', paste: '粘贴', edit: '编辑', file: '导入' }
 
 function stampName() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `Screenshot_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.png`
+}
+
+/** 键盘事件 → Electron accelerator（须含修饰键） */
+function acceleratorFromEvent(e) {
+  const mods = []
+  if (e.metaKey || e.ctrlKey) mods.push('CommandOrControl')
+  if (e.shiftKey) mods.push('Shift')
+  if (e.altKey) mods.push('Alt')
+  const k = e.key
+  let key = null
+  if (/^[a-zA-Z]$/.test(k)) key = k.toUpperCase()
+  else if (/^[0-9]$/.test(k)) key = k
+  else if (k === ' ') key = 'Space'
+  else if (/^F([1-9]|1[0-9])$/.test(k)) key = k
+  else if (k === 'ArrowUp') key = 'Up'
+  else if (k === 'ArrowDown') key = 'Down'
+  else if (k === 'ArrowLeft') key = 'Left'
+  else if (k === 'ArrowRight') key = 'Right'
+  if (!key || !mods.length) return null
+  return [...mods, key].join('+')
 }
 
 export function createWorkspace(bundle) {
@@ -33,20 +56,9 @@ export function createWorkspace(bundle) {
   } = vue
   const {
     ElButton,
-    ElCheckbox,
     ElDialog,
-    ElDropdown,
-    ElDropdownItem,
-    ElDropdownMenu,
     ElEmpty,
-    ElForm,
-    ElFormItem,
     ElInput,
-    ElInputNumber,
-    ElOption,
-    ElSelect,
-    ElTabPane,
-    ElTabs,
     ElTag,
     ElTooltip,
     message,
@@ -68,43 +80,45 @@ export function createWorkspace(bundle) {
     localOcr: false,
     recognize: false,
     translate: false,
-    img2img: false
+    img2img: false,
+    directTest: false
   })
   const results = reactive({ ocr: '', recognize: '', translate: '', images: [] })
   const aiPanel = reactive({
     recognizePrompt: '',
-    img2imgPrompt: '',
-    shell: 'none'
+    img2imgPrompt: ''
   })
-  const sourceDialog = reactive({ visible: false, type: 'window', sources: [], loading: false, forLongshot: false })
+  const sourceDialog = reactive({ visible: false, type: 'window', sources: [], loading: false })
   const historyList = ref([])
   const thumbs = reactive({})
-  const longshot = reactive({
-    active: false,
-    auto: false,
-    height: 0,
-    segments: 0,
-    sourceName: '',
-    grabbing: false,
-    session: null,
-    stitcher: null,
-    timer: null,
-    pending: false
-  })
+  // 设置 UI 状态
+  const hotkeyRecording = ref(false)
+  const hotkeyStatus = ref(null) // { ok, text }
+  const directTestStatus = ref(null) // { ok, text }
 
   const currentProvider = computed(() => providers.value.find((p) => p.id === settings.providerId) || null)
   const modelOptions = computed(() => ai.visibleModels(currentProvider.value))
-  const visionReady = computed(() => !!(settings.providerId && settings.visionModel))
-  const chatReady = computed(() => !!(settings.providerId && settings.chatModel))
-  const imageReady = computed(() => !!(settings.providerId && settings.imageModel))
-  const hasImage = computed(() => !!editor.state.width)
+  const aiCfg = computed(() => ai.resolveAi(settings))
+  const visionOk = computed(() => ai.visionReady(aiCfg.value))
+  const chatOk = computed(() => ai.chatReady(aiCfg.value))
+  const isAppMode = computed(() => settings.aiMode === 'app')
+  const imageReady = computed(() => isAppMode.value && !!(settings.providerId && settings.imageModel))
+  const hasImage = computed(() => { void editor.version.value; return !editor.isEmpty })
+  let documentId = 0
+  const currentSource = ref('edit')
+  const historyFilter = ref('all')
+  const aiBadge = computed(() => {
+    if (!aiCfg.value) return '未配置（OCR 将用本地识别兜底）'
+    if (aiCfg.value.mode === 'direct') return `独立配置 · ${aiCfg.value.visionModel || aiCfg.value.chatModel}`
+    return `主程序供应商 · ${currentProvider.value?.name || aiCfg.value.providerId}`
+  })
 
   // ---- 通用 ----
 
   async function persistSettings() {
     await saveSettings(ctx, { ...settings })
   }
-  watch(settings, persistSettings, { deep: true })
+
 
   async function loadProviders() {
     try {
@@ -140,13 +154,13 @@ export function createWorkspace(bundle) {
     return true
   }
 
-  function requireProvider(modelKey) {
-    if (!settings.providerId) {
-      message.warning('请先在「设置」中选择 AI 供应商（在主应用 AI 工作台配置）')
+  function requireAi(kind) {
+    if (kind === 'vision' && !visionOk.value) {
+      message.warning('请先在「设置 → AI 配置」中完成接口与识图模型配置')
       return false
     }
-    if (!settings[modelKey]) {
-      message.warning('请先在「设置」中选择对应模型')
+    if (kind === 'chat' && !chatOk.value) {
+      message.warning('请先在「设置 → AI 配置」中完成接口与翻译模型配置')
       return false
     }
     return true
@@ -157,31 +171,38 @@ export function createWorkspace(bundle) {
     if (!editor.state.dirty && editor.state.boundId) return editor.state.boundId
     const canvas = editor.exportCanvas()
     if (!canvas) return null
+    const version = editor.version.value
     const meta = await historyLib.addHistory(ctx, { canvas, source: source || 'edit', limit: settings.historyLimit })
-    editor.state.boundId = meta.id
-    editor.state.dirty = false
+    if (editor.version.value === version) {
+      editor.state.boundId = meta.id
+      editor.state.dirty = false
+    }
     await refreshHistory()
     return meta.id
   }
 
   // ---- 捕获 ----
 
-  function loadIntoEditor(canvas, source, boundId = null) {
-    editor.load(canvas, { boundId })
+  function loadIntoEditor(canvas, source, boundId = null, output = boundId ? undefined : settings.appearance) {
+    documentId++
+    currentSource.value = source
+    Object.assign(results, { ocr: '', recognize: '', translate: '', images: [] })
+    editor.load(canvas, { boundId, appearance:output })
+    editor.state.dirty = !!(output?.rounded || (output?.shell && output.shell !== 'none'))
     tab.value = 'shot'
   }
 
   async function captureAndLoad(source, canvas) {
     loadIntoEditor(canvas, source)
+    const version = editor.version.value
     const meta = await historyLib.addHistory(ctx, { canvas, source, limit: settings.historyLimit })
-    editor.state.boundId = meta.id
+    if (editor.version.value === version) editor.state.boundId = meta.id
     await refreshHistory()
     message.success(`截图完成（已存入历史 · ${SOURCE_LABEL[source] || source}）`)
   }
 
-  function openSourceDialog(type, forLongshot = false) {
+  function openSourceDialog(type) {
     sourceDialog.type = type
-    sourceDialog.forLongshot = forLongshot
     sourceDialog.visible = true
     sourceDialog.loading = true
     sourceDialog.sources = []
@@ -201,10 +222,6 @@ export function createWorkspace(bundle) {
   async function chooseSource(s) {
     sourceDialog.visible = false
     try {
-      if (sourceDialog.forLongshot) {
-        await startLongshot(s)
-        return
-      }
       const canvas = await capture.grabSource(s.id)
       await captureAndLoad(s.type === 'screen' ? 'screen' : 'window', canvas)
     } catch (err) {
@@ -216,9 +233,9 @@ export function createWorkspace(bundle) {
     }
   }
 
-  function startRegion() {
-    capture
-      .startRegion(ctx.meta.id)
+  function startRegion(delay = 0) {
+    return capture
+      .startRegion(ctx.meta.id, delay)
       .catch((err) => message.error(`无法启动区域截图：${err.message}`))
   }
 
@@ -231,74 +248,7 @@ export function createWorkspace(bundle) {
     await captureAndLoad('paste', canvas)
   }
 
-  // ---- 长图 ----
-
-  async function startLongshot(source) {
-    try {
-      longshot.session = await capture.openCaptureStream(source.id)
-      longshot.stitcher = createStitcher()
-      longshot.sourceName = source.name
-      longshot.height = 0
-      longshot.segments = 0
-      longshot.active = true
-      longshot.auto = false
-      await captureSegment()
-    } catch (err) {
-      message.error(`长图启动失败：${err.message}`)
-      stopLongshot(false)
-    }
-  }
-
-  async function captureSegment() {
-    if (!longshot.session || longshot.grabbing) return
-    longshot.grabbing = true
-    try {
-      const frame = await longshot.session.grab()
-      const r = longshot.stitcher.append(frame)
-      longshot.height = r.height
-      longshot.segments += 1
-      if (r.noNew) message.info('画面与上一段相同：请先滚动目标窗口再抓取')
-      if (r.truncated) message.warning('已达长图高度上限，停止追加')
-    } catch (err) {
-      message.error(`抓取失败：${err.message}`)
-    } finally {
-      longshot.grabbing = false
-    }
-  }
-
-  function setAuto(on) {
-    longshot.auto = on
-    if (longshot.timer) {
-      clearInterval(longshot.timer)
-      longshot.timer = null
-    }
-    if (on) {
-      longshot.timer = setInterval(() => {
-        void captureSegment()
-      }, Math.max(300, settings.intervalMs))
-    }
-  }
-
-  async function finishLongshot() {
-    const canvas = longshot.stitcher?.result()
-    setAuto(false)
-    longshot.session?.close()
-    longshot.session = null
-    longshot.active = false
-    if (!canvas) return
-    await captureAndLoad('long', canvas)
-  }
-
-  function stopLongshot(notify = true) {
-    setAuto(false)
-    longshot.session?.close()
-    longshot.session = null
-    longshot.stitcher = null
-    longshot.active = false
-    if (notify) message.info('已取消长图')
-  }
-
-  // ---- 导出动作 ----
+  // ---- 导出动作（针对编辑器当前图，即历史二次编辑场景） ----
 
   async function copyCurrent() {
     if (!requireEditorImage() || busy.copy) return
@@ -330,7 +280,7 @@ export function createWorkspace(bundle) {
       })
       if (r.saved) message.success(`已保存：${r.filePath}`)
       else message.info('已取消保存')
-      await ensureHistory('edit')
+      if (r.saved) await ensureHistory('edit')
     } catch (err) {
       message.error(`保存失败：${err.message}`)
     } finally {
@@ -352,33 +302,25 @@ export function createWorkspace(bundle) {
     }
   }
 
-  function applyShellToCurrent(shellId) {
-    if (!requireEditorImage()) return
-    const canvas = editor.exportCanvas()
-    if (!canvas) return
-    const shelled = applyShell(canvas, shellId)
-    loadIntoEditor(shelled, 'edit')
-    message.success(shellId === 'none' ? '已移除壳' : '已套壳（原截图仍在历史中）')
-  }
-
   // ---- AI 动作 ----
 
   async function runOcr(mode = 'ai') {
     if (!requireEditorImage()) return
-    if (mode === 'ai' && !requireProvider('visionModel')) return
+    if (mode === 'ai' && !requireAi('vision')) return
     const key = mode === 'ai' ? 'ocr' : 'localOcr'
+    const id = documentId
     busy[key] = true
     try {
-      const input = ai.aiImageInput(editor.exportCanvas())
+      const image = editor.exportScene()
+      const input = mode === 'ai' ? ai.aiImageInput(image) : image.toDataURL('image/png')
+      let text
       if (mode === 'ai') {
-        results.ocr = await ai.visionChat({
-          providerId: settings.providerId,
-          model: settings.visionModel,
+        text = await ai.visionChatResolved(aiCfg.value, {
           prompt: ai.OCR_PROMPT,
           imageDataUrl: input
         })
       } else {
-        results.ocr = await ocrLocal({
+        text = await ocrLocal({
           imageDataUrl: input,
           langs: settings.tesseractLangs,
           onProgress: (p, status) => {
@@ -386,6 +328,8 @@ export function createWorkspace(bundle) {
           }
         })
       }
+      if (documentId !== id) return
+      results.ocr = text
       if (!results.ocr) message.info('未识别到文字')
     } catch (err) {
       message.error(`OCR 失败：${err.message}`)
@@ -395,16 +339,16 @@ export function createWorkspace(bundle) {
   }
 
   async function runRecognize() {
-    if (!requireEditorImage() || !requireProvider('visionModel') || busy.recognize) return
+    if (!requireEditorImage() || !requireAi('vision') || busy.recognize) return
+    const id = documentId
     busy.recognize = true
     try {
-      const input = ai.aiImageInput(editor.exportCanvas())
-      results.recognize = await ai.visionChat({
-        providerId: settings.providerId,
-        model: settings.visionModel,
+      const input = ai.aiImageInput(editor.exportScene())
+      const text = await ai.visionChatResolved(aiCfg.value, {
         prompt: aiPanel.recognizePrompt.trim() || ai.RECOGNIZE_PROMPT,
         imageDataUrl: input
       })
+      if (id === documentId) results.recognize = text
     } catch (err) {
       message.error(`识图失败：${err.message}`)
     } finally {
@@ -418,15 +362,15 @@ export function createWorkspace(bundle) {
       message.warning('请先完成 OCR（翻译基于 OCR 文本，可在结果框中修改）')
       return
     }
-    if (!requireProvider('chatModel') || busy.translate) return
+    if (!requireAi('chat') || busy.translate) return
+    const id = documentId
     busy.translate = true
     try {
-      results.translate = await ai.textChat({
-        providerId: settings.providerId,
-        model: settings.chatModel,
+      const translated = await ai.textChatResolved(aiCfg.value, {
         system: `你是专业翻译。把用户发来的内容翻译成${settings.targetLang}，只输出译文，保留原有排版。`,
         prompt: text
       })
+      if (id === documentId) results.translate = translated
     } catch (err) {
       message.error(`翻译失败：${err.message}`)
     } finally {
@@ -440,17 +384,19 @@ export function createWorkspace(bundle) {
       message.warning('请输入图生图的改图描述（如：把背景改成星空）')
       return
     }
-    if (!requireEditorImage() || !requireProvider('imageModel') || busy.img2img) return
+    if (!requireEditorImage() || !imageReady.value || busy.img2img) return
+    const id = documentId
     busy.img2img = true
     results.images = []
     try {
-      const input = ai.aiImageInput(editor.exportCanvas(), 1536)
+      const input = ai.aiImageInput(editor.exportScene(), 1536)
       const list = await ai.imageToImage({
         providerId: settings.providerId,
         model: settings.imageModel,
         prompt,
         imageDataUrl: input
       })
+      if (id !== documentId) return
       results.images = list
       if (!list.length) message.info('供应商未返回图片')
     } catch (err) {
@@ -460,27 +406,63 @@ export function createWorkspace(bundle) {
     }
   }
 
-  async function loadResultImage(r) {
-    const canvas = await ai.resultToCanvas(r)
-    loadIntoEditor(canvas, 'edit')
-    message.success('已载入编辑器')
+  async function testDirectAi() {
+    busy.directTest = true
+    directTestStatus.value = null
+    try {
+      await ai.testDirectAi({
+        protocol: settings.direct.protocol,
+        baseUrl: settings.direct.baseUrl,
+        apiKey: settings.direct.apiKey,
+        model: settings.direct.visionModel || settings.direct.chatModel
+      })
+      directTestStatus.value = { ok: true, text: '连接成功' }
+    } catch (err) {
+      directTestStatus.value = { ok: false, text: err.message.slice(0, 120) }
+    } finally {
+      busy.directTest = false
+    }
   }
 
-  async function saveResultImage(r) {
-    const bytes = await new Promise((resolve, reject) => {
-      fetch(r.dataUrl)
-        .then((res) => res.arrayBuffer())
-        .then((buf) => resolve(new Uint8Array(buf)))
-        .catch(reject)
-    })
-    const res = await capture.saveImageFile({ bytes, ext: '.png', dir: settings.saveDir || undefined, defaultName: `AI_${stampName()}` })
-    if (res.saved) message.success(`已保存：${res.filePath}`)
+  // ---- 全局快捷键 ----
+
+  async function applyHotkey() {
+    if (!window.api.shortcuts?.register) return
+    hotkeyStatus.value = null
+    try {
+      if (!settings.hotkey.enabled || !settings.hotkey.accelerator) {
+        await window.api.shortcuts.unregister(ctx.meta.id)
+        return
+      }
+      const r = await window.api.shortcuts.register({
+        pluginId: ctx.meta.id,
+        action: 'capture-region',
+        accelerator: settings.hotkey.accelerator
+      })
+      hotkeyStatus.value = r.ok
+        ? { ok: true, text: `已生效：${settings.hotkey.accelerator}` }
+        : { ok: false, text: r.error || '注册失败' }
+    } catch (err) {
+      hotkeyStatus.value = { ok: false, text: err.message }
+    }
   }
 
-  async function copyText(text) {
-    if (!text) return
-    await navigator.clipboard.writeText(text)
-    message.success('已复制')
+  function onHotkeyKeydown(e) {
+    if (!hotkeyRecording.value) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key === 'Escape') {
+      hotkeyRecording.value = false
+      e.target?.blur?.()
+      return
+    }
+    const acc = acceleratorFromEvent(e)
+    if (acc) {
+      settings.hotkey.accelerator = acc
+      hotkeyRecording.value = false
+      e.target?.blur?.()
+      void applyHotkey()
+    }
   }
 
   // ---- 历史 ----
@@ -488,6 +470,9 @@ export function createWorkspace(bundle) {
   async function refreshHistory() {
     const list = await historyLib.listHistory(ctx)
     historyList.value = list
+    if (!list.some(item => item.id === editor.state.boundId)) editor.state.boundId = null
+    const ids = new Set(list.map(item => item.id))
+    for (const key of Object.keys(thumbs)) if (!ids.has(key)) delete thumbs[key]
     for (const item of list) {
       if (!thumbs[item.id]) {
         historyLib
@@ -504,7 +489,8 @@ export function createWorkspace(bundle) {
     const url = await historyLib.readImageDataUrl(ctx, item.id)
     const canvas = await loadImageToCanvas(url)
     loadIntoEditor(canvas, item.source, item.id)
-    message.info('已载入编辑器（保存/复制时会更新这条历史）')
+    results.ocr = item.note || ''
+    message.info('已载入编辑器，修改后导出会保留原图')
   }
 
   async function copyHistoryItem(item) {
@@ -530,6 +516,7 @@ export function createWorkspace(bundle) {
 
   async function removeHistoryItem(item) {
     await historyLib.removeHistory(ctx, item.id)
+    if (editor.state.boundId === item.id) editor.state.boundId = null
     delete thumbs[item.id]
     await refreshHistory()
   }
@@ -545,6 +532,7 @@ export function createWorkspace(bundle) {
       return
     }
     await historyLib.clearHistory(ctx)
+    editor.state.boundId = null
     Object.keys(thumbs).forEach((k) => delete thumbs[k])
     await refreshHistory()
     message.success('已清空')
@@ -560,51 +548,23 @@ export function createWorkspace(bundle) {
     }
   }
 
-  const TARGET_LANGS = ['简体中文', '繁體中文', 'English', '日本語', '한국어', 'Français', 'Deutsch', 'Español', 'Русский']
+  function switchProvider(v) {
+    settings.providerId = v
+    const opts = modelOptions.value.map((m) => m.id)
+    for (const key of ['visionModel', 'chatModel', 'imageModel']) {
+      if (!opts.includes(settings[key])) settings[key] = ''
+    }
+  }
 
   // ---- 渲染 ----
 
-  function renderCaptureBar() {
-    return h('div', { class: 'st-cap-bar' }, [
-      h(ElButton, { type: 'primary', onClick: startRegion }, () => '🖼 区域截图'),
-      h(ElButton, { onClick: () => openSourceDialog('screen') }, () => '截全屏'),
-      h(ElButton, { onClick: () => openSourceDialog('window') }, () => '应用窗口'),
-      h(ElButton, { type: 'warning', plain: true, onClick: () => openSourceDialog('window', true) }, () => '截长图'),
-      h(ElButton, { onClick: pasteImage }, () => '粘贴图片'),
-      h('div', { class: 'st-flex-grow' }),
-      h(
-        ElDropdown,
-        {
-          disabled: !hasImage.value,
-          onCommand: (id) => applyShellToCurrent(id)
-        },
-        {
-          default: () => h(ElButton, { disabled: !hasImage.value }, () => '带壳截图 ▾'),
-          dropdown: () => [
-            h(ElDropdownMenu, {}, () =>
-              SHELLS.map((s) => h(ElDropdownItem, { key: s.id, command: s.id }, () => s.name))
-            )
-          ]
-        }
-      )
-    ])
+  async function importFile(file) {
+    if (!file) return
+    if (!/^image\/(png|jpeg|webp|gif|bmp)$/i.test(file.type)) throw new Error('请选择 PNG、JPEG、WebP、GIF 或 BMP 图片')
+    if (file.size > 32 * 1024 * 1024) throw new Error('图片超过 32 MB')
+    await captureAndLoad('file', await capture.blobToCanvas(file))
   }
-
-  function renderLongshotPanel() {
-    if (!longshot.active) return null
-    return h('div', { class: 'st-longshot' }, [
-      h('span', { class: 'st-longshot-name' }, `长图模式 · ${longshot.sourceName}`),
-      h('span', { class: 'st-longshot-stat' }, `已拼接 ${longshot.segments} 段 · 高 ${longshot.height}px`),
-      h(ElCheckbox, {
-        modelValue: longshot.auto,
-        'onUpdate:modelValue': setAuto,
-        label: '自动抓帧'
-      }),
-      h(ElButton, { size: 'small', loading: longshot.grabbing, onClick: captureSegment }, () => '抓取一段'),
-      h(ElButton, { size: 'small', type: 'primary', onClick: finishLongshot }, () => '完成拼接'),
-      h(ElButton, { size: 'small', onClick: () => stopLongshot() }, () => '取消')
-    ])
-  }
+  const renderCaptureBar = captureDesk({ h, ref, startRegion, openSourceDialog, pasteImage, importFile, message })
 
   function renderActions() {
     return h('div', { class: 'st-actions' }, [
@@ -617,62 +577,23 @@ export function createWorkspace(bundle) {
       settings.saveDir
         ? h(ElButton, { disabled: !hasImage.value, onClick: () => saveCurrent(true) }, () => '另存为…')
         : null,
-      h(ElButton, { loading: busy.pin, disabled: !hasImage.value, onClick: pinCurrent }, () => '📌 钉到屏幕'),
-      h('div', { class: 'st-flex-grow' }),
-      h(ElButton, { loading: busy.ocr, disabled: !hasImage.value || !visionReady.value, onClick: () => runOcr('ai') }, () => 'OCR 提取'),
+      h(ElButton, { loading: busy.pin, disabled: !hasImage.value, onClick: pinCurrent }, () => '贴到屏幕'),
+      h(ElButton, {onClick:()=>chooseAppearance(editor.exportScene(),editor.state.appearance,editor.setAppearance)}, ()=>'截图外观…')
+    ])
+  }
+
+  function renderAiActions() {
+    return h('div', {class:'st-actions'}, [
+      h(ElTag, { effect: 'plain', size: 'small', type: aiCfg.value ? 'info' : 'warning' }, () => aiBadge.value),
+      h(ElButton, { loading: busy.ocr, disabled: !hasImage.value || !visionOk.value, onClick: () => runOcr('ai') }, () => 'OCR 提取'),
       h(ElButton, { loading: busy.localOcr, disabled: !hasImage.value, title: '本地识别兜底（首次需下载模型）', onClick: () => runOcr('local') }, () => '本地OCR'),
-      h(ElButton, { loading: busy.recognize, disabled: !hasImage.value || !visionReady.value, onClick: runRecognize }, () => 'AI 识图'),
-      h(ElButton, { loading: busy.translate, disabled: !chatReady.value, onClick: runTranslate }, () => '翻译')
+      h(ElButton, { loading: busy.recognize, disabled: !hasImage.value || !visionOk.value, onClick: runRecognize }, () => 'AI 识图'),
+      h(ElButton, { loading: busy.translate, disabled: !chatOk.value, onClick: runTranslate }, () => '翻译')
     ])
   }
 
   function renderAiPanel() {
-    const modelSelect = (modelKey, placeholder) =>
-      h(
-        ElSelect,
-        {
-          modelValue: settings[modelKey],
-          'onUpdate:modelValue': (v) => (settings[modelKey] = v),
-          placeholder,
-          size: 'small',
-          style: 'width:220px',
-          clearable: true,
-          filterable: true
-        },
-        () => modelOptions.value.map((m) => h(ElOption, { key: m.id, value: m.id, label: m.name || m.id }))
-      )
-
     return h('div', { class: 'st-ai-panel' }, [
-      h('div', { class: 'st-ai-row' }, [
-        h('span', { class: 'st-ai-label' }, '识图/OCR 模型'),
-        modelSelect('visionModel', '选择视觉模型'),
-        h('span', { class: 'st-ai-label' }, '翻译模型'),
-        modelSelect('chatModel', '选择文本模型'),
-        h('span', { class: 'st-ai-label' }, '翻译目标'),
-        h(
-          ElSelect,
-          {
-            modelValue: settings.targetLang,
-            'onUpdate:modelValue': (v) => (settings.targetLang = v),
-            size: 'small',
-            style: 'width:130px'
-          },
-          () => TARGET_LANGS.map((l) => h(ElOption, { key: l, value: l, label: l }))
-        )
-      ]),
-      h('div', { class: 'st-ai-row' }, [
-        h('span', { class: 'st-ai-label' }, '图生图模型'),
-        modelSelect('imageModel', '选择生图模型'),
-        h(ElInput, {
-          modelValue: aiPanel.img2imgPrompt,
-          'onUpdate:modelValue': (v) => (aiPanel.img2imgPrompt = v),
-          placeholder: '改图描述，如：把背景换成星空、转成水彩风格',
-          size: 'small',
-          style: 'flex:1;min-width:220px',
-          clearable: true
-        }),
-        h(ElButton, { size: 'small', type: 'primary', loading: busy.img2img, disabled: !hasImage.value || !imageReady.value, onClick: runImg2img }, () => 'AI 图生图')
-      ]),
       h('div', { class: 'st-ai-row' }, [
         h('span', { class: 'st-ai-label' }, '识图提问'),
         h(ElInput, {
@@ -682,10 +603,32 @@ export function createWorkspace(bundle) {
           size: 'small',
           style: 'flex:1;min-width:220px',
           clearable: true
+        })
+      ]),
+      h('div', { class: 'st-ai-row' }, [
+        h('span', { class: 'st-ai-label' }, '图生图'),
+        h(ElInput, {
+          modelValue: aiPanel.img2imgPrompt,
+          'onUpdate:modelValue': (v) => (aiPanel.img2imgPrompt = v),
+          placeholder: isAppMode.value
+            ? '改图描述，如：把背景换成星空、转成水彩风格'
+            : '独立配置模式不支持图生图，切换到「复用主程序」后可用',
+          size: 'small',
+          style: 'flex:1;min-width:220px',
+          clearable: true,
+          disabled: !isAppMode.value
         }),
-        !providers.value.length
-          ? h(ElTag, { type: 'warning', effect: 'plain' }, () => '尚未配置 AI 供应商，请在主应用「AI 工作台」添加')
-          : null
+        h(
+          ElButton,
+          {
+            size: 'small',
+            type: 'primary',
+            loading: busy.img2img,
+            disabled: !hasImage.value || !imageReady.value,
+            onClick: runImg2img
+          },
+          () => 'AI 图生图'
+        )
       ])
     ])
   }
@@ -741,22 +684,45 @@ export function createWorkspace(bundle) {
     ])
   }
 
+  async function loadResultImage(r) {
+    const canvas = await ai.resultToCanvas(r)
+    loadIntoEditor(canvas, 'edit')
+    message.success('已载入编辑器')
+  }
+
+  async function saveResultImage(r) {
+    const bytes = await new Promise((resolve, reject) => {
+      fetch(r.dataUrl)
+        .then((res) => res.arrayBuffer())
+        .then((buf) => resolve(new Uint8Array(buf)))
+        .catch(reject)
+    })
+    const res = await capture.saveImageFile({ bytes, ext: '.png', dir: settings.saveDir || undefined, defaultName: `AI_${stampName()}` })
+    if (res.saved) message.success(`已保存：${res.filePath}`)
+  }
+
+  async function copyText(text) {
+    if (!text) return
+    await navigator.clipboard.writeText(text)
+    message.success('已复制')
+  }
+
   function renderSourceDialog() {
     return h(ElDialog, {
       modelValue: sourceDialog.visible,
       'onUpdate:modelValue': (v) => (sourceDialog.visible = v),
-      title: sourceDialog.type === 'screen' ? (sourceDialog.forLongshot ? '选择长图来源屏幕' : '选择要截取的屏幕') : sourceDialog.forLongshot ? '选择长图来源窗口' : '选择要截取的窗口',
-      width: '720px'
+      title: sourceDialog.type === 'screen' ? '选择要截取的屏幕' : '选择要截取的窗口',
+      width: 'min(720px, 92vw)'
     }, {
       default: () =>
         sourceDialog.loading
           ? h('div', { class: 'st-dialog-loading' }, '正在枚举窗口…')
-          : h(
+          : !sourceDialog.sources.length ? h(ElEmpty, {description: '没有可用画面，请检查屏幕录制权限后重试'}) : h(
               'div',
               { class: 'st-source-grid' },
               sourceDialog.sources.map((s) =>
                 h(
-                  'div',
+                  'button',
                   { class: 'st-source-card', key: s.id, onClick: () => chooseSource(s) },
                   [
                     h('img', { class: 'st-source-thumb', src: s.thumbnail }),
@@ -774,11 +740,13 @@ export function createWorkspace(bundle) {
   // ---- 历史 tab ----
 
   function renderHistory() {
+    const visible = historyList.value.filter(item => historyFilter.value === 'all' || item.source === historyFilter.value)
     if (!historyList.value.length) {
       return h(ElEmpty, { description: '暂无截图历史（每次截图自动保存在这里）' })
     }
     return h('div', { class: 'st-history' }, [
       h('div', { class: 'st-history-bar' }, [
+        h('select', { 'aria-label':'按来源筛选历史', value:historyFilter.value, onChange:e => historyFilter.value = e.target.value }, [h('option',{value:'all'},'全部来源'), ...Object.entries(SOURCE_LABEL).map(([value,label]) => h('option',{value},label))]),
         h('span', { class: 'st-hint' }, `共 ${historyList.value.length} 条（保留最近 ${settings.historyLimit} 条）`),
         h('div', { class: 'st-flex-grow' }),
         h(ElButton, { size: 'small', onClick: refreshHistory }, () => '刷新'),
@@ -787,9 +755,9 @@ export function createWorkspace(bundle) {
       h(
         'div',
         { class: 'st-history-grid' },
-        historyList.value.map((item) =>
+        !visible.length ? [h('p', {}, '此来源暂无截图')] : visible.map((item) =>
           h('div', { class: 'st-history-card', key: item.id }, [
-            h('div', { class: 'st-history-thumb', onClick: () => openHistoryItem(item) }, [
+            h('button', { 'aria-label':'打开截图', class: 'st-history-thumb', onClick: () => openHistoryItem(item) }, [
               thumbs[item.id] ? h('img', { src: thumbs[item.id], loading: 'lazy' }) : h('div', { class: 'st-thumb-loading' }, '…')
             ]),
             h('div', { class: 'st-history-meta' }, [
@@ -801,11 +769,11 @@ export function createWorkspace(bundle) {
               )
             ]),
             h('div', { class: 'st-history-actions' }, [
-              h(ElTooltip, { content: '载入编辑器', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => openHistoryItem(item) }, () => '✏') }),
-              h(ElTooltip, { content: '复制原图', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => copyHistoryItem(item) }, () => '⧉') }),
-              h(ElTooltip, { content: '另存为', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => saveHistoryItem(item) }, () => '💾') }),
-              h(ElTooltip, { content: '钉到屏幕', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => pinHistoryItem(item) }, () => '📌') }),
-              h(ElTooltip, { content: '删除', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, type: 'danger', onClick: () => removeHistoryItem(item) }, () => '✕') })
+              h(ElTooltip, { content: '载入编辑器', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => openHistoryItem(item) }, () => '编辑') }),
+              h(ElTooltip, { content: '复制原图', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => copyHistoryItem(item) }, () => '复制') }),
+              h(ElTooltip, { content: '另存为', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => saveHistoryItem(item) }, () => '另存') }),
+              h(ElTooltip, { content: '钉到屏幕', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, onClick: () => pinHistoryItem(item) }, () => '贴图') }),
+              h(ElTooltip, { content: '删除', showAfter: 400 }, { default: () => h(ElButton, { size: 'small', text: true, type: 'danger', onClick: () => removeHistoryItem(item) }, () => '删除') })
             ])
           ])
         )
@@ -815,124 +783,47 @@ export function createWorkspace(bundle) {
 
   // ---- 设置 tab ----
 
-  function renderSettings() {
-    const formItem = (label, control, hint) =>
-      h(ElFormItem, { label }, { default: () => [control, hint ? h('div', { class: 'st-hint' }, hint) : null] })
-
-    return h(ElForm, { labelWidth: '120px', class: 'st-settings' }, () => [
-      formItem(
-        '保存目录',
-        h('div', { class: 'st-dir-row' }, [
-          h(ElInput, { modelValue: settings.saveDir, readonly: true, placeholder: '未设置（保存时弹另存对话框）', style: 'flex:1' }),
-          h(ElButton, { onClick: chooseSaveDir }, () => '选择目录'),
-          settings.saveDir
-            ? h(ElButton, { onClick: () => (settings.saveDir = '') }, () => '清除')
-            : null
-        ]),
-        '设置后「保存」按钮直接写入该目录，不再弹对话框'
-      ),
-      formItem(
-        '历史条数',
-        h(ElInputNumber, {
-          modelValue: settings.historyLimit,
-          'onUpdate:modelValue': (v) => (settings.historyLimit = v),
-          min: 10,
-          max: 200,
-          step: 10
-        }),
-        '超出后自动删除最旧的截图文件'
-      ),
-      formItem(
-        '长图抓帧间隔',
-        h(ElInputNumber, {
-          modelValue: settings.intervalMs,
-          'onUpdate:modelValue': (v) => (settings.intervalMs = v),
-          min: 300,
-          max: 2000,
-          step: 100
-        }),
-        '自动模式下的抓帧频率（毫秒）；内容滚动慢可调大'
-      ),
-      formItem(
-        'AI 供应商',
-        h(
-          ElSelect,
-          {
-            modelValue: settings.providerId,
-            'onUpdate:modelValue': (v) => {
-              settings.providerId = v
-              const opts = modelOptions.value.map((m) => m.id)
-              for (const key of ['visionModel', 'chatModel', 'imageModel']) {
-                if (!opts.includes(settings[key])) settings[key] = ''
-              }
-            },
-            placeholder: '选择供应商',
-            style: 'width:280px'
-          },
-          () => providers.value.map((p) => h(ElOption, { key: p.id, value: p.id, label: p.name }))
-        ),
-        '供应商在主应用「AI 工作台 → 供应商」中配置，此处直接复用（密钥不出主进程）'
-      ),
-      formItem(
-        '翻译目标语言',
-        h(
-          ElSelect,
-          {
-            modelValue: settings.targetLang,
-            'onUpdate:modelValue': (v) => (settings.targetLang = v),
-            style: 'width:200px'
-          },
-          () => TARGET_LANGS.map((l) => h(ElOption, { key: l, value: l, label: l }))
-        )
-      )
-    ])
-  }
+  const renderSettings = settingsView({ h, ui, settings, modelOptions, chooseSaveDir, busy, testDirectAi, directTestStatus, switchProvider, providers, isAppMode, hotkeyRecording, applyHotkey, onHotkeyKeydown, hotkeyStatus })
 
   // ---- 主渲染 ----
 
-  return defineComponent({
+  const component = defineComponent({
     name: 'ScreenshotWorkspace',
     setup() {
       // 生命周期必须在 setup() 内注册（工厂函数体里没有组件实例，注册会静默失效）
-      let unsubRegion = null
+      let mounted = true
+      const stop = ctx.events.on('screenshot-tool:archived', () => { void refreshHistory() })
+      let stopWatch
       onMounted(async () => {
-        Object.assign(settings, await loadSettings(ctx))
-        await loadProviders()
-        await refreshHistory()
-        unsubRegion = capture.onRegionResult(async ({ dataUrl }) => {
-          try {
-            const canvas = await loadImageToCanvas(dataUrl)
-            await captureAndLoad('region', canvas)
-          } catch (err) {
-            message.error(`区域截图载入失败：${err.message}`)
-          }
-        })
+        try {
+          const saved = await loadSettings(ctx)
+          if (!mounted) return
+          Object.assign(settings, saved)
+          stopWatch = watch(settings, () => persistSettings().catch(err => message.error(`保存设置失败：${err.message}`)), { deep: true })
+          await Promise.all([loadProviders(), refreshHistory()])
+        } catch (err) { message.error(`载入截图工作台失败：${err.message}`) }
       })
-      onBeforeUnmount(() => {
-        unsubRegion?.()
-        setAuto(false)
-        longshot.session?.close()
-      })
-      return () =>
-        h('div', { class: 'st-workspace' }, [
+      onBeforeUnmount(() => { mounted = false; stopWatch?.(); stop() })
+      const nav = (name, label) => h('button', { class: 'st-nav-item', 'aria-pressed': tab.value === name,
+        onClick: () => { tab.value = name } }, label)
+      return () => h('section', { class: 'st-workspace' }, [
+        h('header', { class:'st-heading' }, [
+          h('div', {}, [h('span', { class:'st-kicker' }, 'CAPTURE STUDIO'), h('h2', {}, '截图工作台')]),
+          h('nav', { 'aria-label':'截图工作台导航' }, [nav('shot','工作台'), nav('history',`历史 · ${historyList.value.length}`), nav('settings','设置')])
+        ]),
+        tab.value === 'history' ? renderHistory() : tab.value === 'settings' ? renderSettings() : [
           renderCaptureBar(),
-          renderLongshotPanel(),
-          h('div', { class: 'st-editor-host' }, [h(editor.component)]),
-          renderActions(),
-          renderAiPanel(),
-          renderResults(),
-          h(
-            ElTabs,
-            { modelValue: tab.value, 'onUpdate:modelValue': (v) => (tab.value = v) },
-            () => [
-              h(ElTabPane, { label: `历史（${historyList.value.length}）`, name: 'history' }, () => renderHistory()),
-              h(ElTabPane, { label: '设置', name: 'settings' }, () => renderSettings())
-            ]
-          ),
-          renderSourceDialog()
-        ])
+          hasImage.value ? h('section', {class:'st-current'}, [
+            h('div', {class:'st-section-title'}, [h('h3',{},'当前截图'),h('span',{class:'st-hint'}, `${SOURCE_LABEL[currentSource.value]} · ${editor.state.width} × ${editor.state.height} px`)]),
+            h('div', {class:'st-editor-host'}, [h(editor.component)]), renderActions(),
+            h('details', {class:'st-inspect'}, [h('summary',{},'文字提取与 AI 识图'), h('p',{class:'st-hint'},'本地 OCR 不上传截图；AI 操作会将图像或文字发送至设置中的供应商。'), renderAiActions(), renderAiPanel(), renderResults()])
+          ]) : h('div', {class:'st-empty-note'}, [h('strong',{},'还没有待编辑的图片'), h('span',{},'框选后可直接复制、保存或贴图。要继续编辑已完成的截图，请从历史中打开。')])
+        ], renderSourceDialog()
+      ])
     }
   })
+  return {component, openLongshot(canvas,id,output) {
+    loadIntoEditor(canvas,'long',id,output)
+    location.hash = `/toolbox/${ctx.meta.id}:screenshot`
+  }}
 }
-
-

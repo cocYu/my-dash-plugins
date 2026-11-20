@@ -1,3 +1,5 @@
+@import "./appearance.css";
+
 /* 截图插件样式：工作台 / 编辑器 / 历史 / 设置。
    跟随主应用 Element Plus 主题变量（同一文档，CSS 变量可直接使用）。 */
 
@@ -291,3 +293,33 @@
 }
 .st-source-name span { overflow: hidden; text-overflow: ellipsis; }
 .st-source-icon { width: 16px; height: 16px; flex: none; }
+
+/* Capture Studio — use the host theme for surfaces, text and native controls. */
+.st-workspace { --st-accent:light-dark(#13665e,#88ddcc); --st-tint:light-dark(#e5f5ef,#1c3834); color:var(--el-text-color-primary); gap:20px; min-width:0; }
+html.dark .st-workspace {--st-accent:#88ddcc;--st-tint:#1c3834}
+.st-heading,.st-section-title {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.st-heading h2,.st-section-title h3 {margin:0;line-height:1.35}
+.st-heading h2 {font-size:clamp(22px,3vw,30px);letter-spacing:-.035em}
+.st-kicker {font:650 11px/2 ui-monospace,monospace;letter-spacing:.17em;color:var(--st-accent)}
+.st-heading nav {display:flex;gap:4px;padding:4px;border-radius:9px;background:var(--el-fill-color-light)}
+.st-nav-item,.st-entry,.st-workspace select {font:inherit;color:inherit;cursor:pointer}
+.st-nav-item {background:none;border:0;border-radius:6px;min-height:36px;padding:0 14px}
+.st-nav-item[aria-pressed=true] {background:var(--el-bg-color);font-weight:650;box-shadow:0 1px 4px #0002}
+.st-capture,.st-current {display:grid;gap:14px}
+.st-section-title h3 {font-size:16px}
+.st-section-title label,.st-empty-note span {color:var(--el-text-color-regular);font-size:13px}
+.st-workspace select {border:1px solid var(--el-border-color);background:var(--el-bg-color);border-radius:6px;padding:5px 8px}
+.st-entries {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(124px,100%),1fr));gap:8px}
+.st-entry {display:grid;align-content:start;justify-items:start;gap:6px;text-align:start;background:var(--el-bg-color);border:1px solid var(--el-border-color);border-radius:10px;padding:16px 12px;transition:border-color .15s}
+.st-entry strong {font-size:15px}.st-entry small {font-size:12px;color:var(--el-text-color-regular)}.st-entry svg {margin-bottom:6px}
+.st-entry.st-primary {background:var(--st-tint);color:var(--st-accent);border-color:var(--st-accent)}
+.st-entry:hover:not(:disabled),.st-entry:active {border-color:var(--st-accent)}.st-entry:disabled {cursor:wait;opacity:.65}
+.st-empty-note {padding:32px 16px;border:1px dashed var(--el-border-color);border-radius:10px;text-align:center;display:grid;gap:8px}
+.st-inspect {padding:14px;border:1px solid var(--el-border-color);border-radius:8px}.st-inspect summary {cursor:pointer;font-weight:600}.st-inspect .st-ai-panel,.st-inspect .st-results {margin-top:12px}
+.st-history-thumb {border:0;padding:0}.st-history-thumb img {height:110px;object-fit:contain}.st-history-actions {flex-wrap:wrap;justify-content:start}.st-history-actions .el-button+.el-button,.st-actions .el-button+.el-button {margin-left:0}
+.st-source-grid {grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))}.st-source-card {color:inherit;padding:0;text-align:start}.st-dir-row,.st-history-bar {flex-wrap:wrap}
+.st-ed-stage {min-width:0}.st-ed-canvas {touch-action:none}.st-settings .el-select,.st-settings .el-input {max-width:100%}
+.st-workspace :is(button,summary,select,input):focus-visible,.st-source-card:focus-visible {outline:2px solid var(--st-accent,var(--el-color-primary));outline-offset:2px}
+@media (prefers-reduced-motion:reduce) {.st-entry,.st-source-card {transition:none}}
+.st-ed-bar input[type=number],.st-settings .st-output-fields input[type=number] {width:5em}
+.st-ed-bar label {font-size:13px;color:var(--el-text-color-regular)}

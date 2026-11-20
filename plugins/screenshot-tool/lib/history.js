@@ -9,15 +9,21 @@ function genId() {
   return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** canvas → PNG 字节 */
-export function canvasBytes(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      if (!blob) return reject(new Error('图片导出失败'))
-      resolve(new Uint8Array(await blob.arrayBuffer()))
-    }, 'image/png')
-  })
+/** 所有对索引的修改走同一条队列，失败不阻塞后续截图。 */
+let tail = Promise.resolve()
+function mutate(fn) {
+  const op = tail.then(fn)
+  tail = op.catch(() => {})
+  return op
 }
+
+function encode(canvas, type, quality) {
+  return new Promise((resolve, reject) => canvas.toBlob(blob => {
+    if (!blob) return reject(new Error('图片导出失败'))
+    blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)), reject)
+  }, type, quality))
+}
+export const canvasBytes = canvas => encode(canvas, 'image/png')
 
 /** 生成缩略图 canvas（最长边 256） */
 export function makeThumb(canvas, maxSide = 256) {
@@ -31,15 +37,6 @@ export function makeThumb(canvas, maxSide = 256) {
   return thumb
 }
 
-function jpegBytes(canvas, quality = 0.8) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      if (!blob) return reject(new Error('缩略图导出失败'))
-      resolve(new Uint8Array(await blob.arrayBuffer()))
-    }, 'image/jpeg', quality)
-  })
-}
-
 async function readMetas(ctx) {
   return (await ctx.storage.get(META_KEY)) || []
 }
@@ -51,31 +48,42 @@ async function writeMetas(ctx, metas) {
 /**
  * 新增一条历史：落盘原图 + 缩略图，裁剪超限条目（同时删除对应文件）。
  * @param source region|screen|window|long|paste|edit
+ * @param note 可选附注（如就地 OCR 文本）
  */
-export async function addHistory(ctx, { canvas, source, limit = 50 }) {
+async function append(ctx, { canvas, source, limit = 50, note = '' }) {
   const id = genId()
   const png = await canvasBytes(canvas)
-  const thumb = await jpegBytes(makeThumb(canvas))
-  await files().write(ctx.meta.id, `${id}.png`, png)
-  await files().write(ctx.meta.id, `${id}.t.jpg`, thumb)
+  const thumb = await encode(makeThumb(canvas), 'image/jpeg', 0.8)
   const meta = {
     id,
     source,
     width: canvas.width,
     height: canvas.height,
     bytes: png.length,
-    at: new Date().toISOString()
+    at: new Date().toISOString(),
+    ...(note ? { note } : {})
   }
   let metas = await readMetas(ctx)
   metas.unshift(meta)
-  const evicted = metas.slice(Math.max(0, limit))
-  metas = metas.slice(0, Math.max(0, limit))
-  await writeMetas(ctx, metas)
-  for (const old of evicted) await removeFiles(old.id)
+  const evicted = metas.slice(Math.max(1, Number(limit) || 50))
+  metas = metas.slice(0, Math.max(1, Number(limit) || 50))
+  try {
+    await files().write(ctx.meta.id, `${id}.png`, png)
+    await files().write(ctx.meta.id, `${id}.t.jpg`, thumb)
+    await writeMetas(ctx, metas)
+  } catch (err) {
+    await removeFiles(ctx, id)
+    throw err
+  }
+  for (const old of evicted) await removeFiles(ctx, old.id)
   return meta
 }
 
-async function removeFiles(id) {
+export function addHistory(ctx, options) {
+  return mutate(() => append(ctx, options))
+}
+
+async function removeFiles(ctx, id) {
   await files().delete(ctx.meta.id, `${id}.png`).catch(() => {})
   await files().delete(ctx.meta.id, `${id}.t.jpg`).catch(() => {})
 }
@@ -101,14 +109,17 @@ export async function copyHistoryImage(ctx, id) {
   return files().copyImage(ctx.meta.id, `${id}.png`)
 }
 
-export async function removeHistory(ctx, id) {
-  let metas = await readMetas(ctx)
-  metas = metas.filter((m) => m.id !== id)
-  await writeMetas(ctx, metas)
-  await removeFiles(id)
+export function removeHistory(ctx, id) {
+  return mutate(async () => {
+    await writeMetas(ctx, (await readMetas(ctx)).filter(item => item.id !== id))
+    await removeFiles(ctx, id)
+  })
 }
 
-export async function clearHistory(ctx) {
-  await writeMetas(ctx, [])
-  await files().clear(pluginId()).catch(() => {})
+export function clearHistory(ctx) {
+  return mutate(async () => {
+    const items = await readMetas(ctx)
+    await writeMetas(ctx, [])
+    for (const { id } of items) await removeFiles(ctx, id)
+  })
 }

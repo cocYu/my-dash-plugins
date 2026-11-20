@@ -30,7 +30,7 @@ async function applySize(nextScale, anchor = null) {
   const height = Math.max(30, Math.round(naturalH * scale))
   // 保持锚点（鼠标位置）附近内容不漂移
   if (anchor) {
-    const cur = await window.api.pin.setBounds({ id: pinId, width, height }).catch(() => null)
+    const cur = await window.api.pin.getBounds(pinId).catch(() => null)
     if (cur) {
       const dx = (width - cur.width) * (anchor.x / (cur.width || 1))
       const dy = (height - cur.height) * (anchor.y / (cur.height || 1))
@@ -51,12 +51,14 @@ window.addEventListener('wheel', (e) => {
 
 let drag = null // { sx, sy, bx, by, raf }
 let pendingMove = null
+let press = 0
 
 window.addEventListener('mousedown', async (e) => {
   if (e.button !== 0) return
   if (menu.contains(e.target)) return
+  const seq = ++press
   const b = await window.api.pin.getBounds(pinId).catch(() => null)
-  if (!b) return
+  if (!b || seq !== press) return
   drag = { sx: e.screenX, sy: e.screenY, bx: b.x, by: b.y, raf: false }
 })
 
@@ -66,13 +68,14 @@ window.addEventListener('mousemove', (e) => {
   if (drag.raf) return
   drag.raf = true
   requestAnimationFrame(() => {
-    drag.raf = false
     if (!drag || !pendingMove) return
+    drag.raf = false
     void window.api.pin.setBounds({ id: pinId, x: pendingMove.x, y: pendingMove.y })
   })
 })
 
 window.addEventListener('mouseup', () => {
+  press++
   drag = null
   pendingMove = null
 })
@@ -148,6 +151,7 @@ async function init() {
   })
   naturalW = img.naturalWidth
   naturalH = img.naturalHeight
+  scale = window.innerWidth / (naturalW || 1)
   // 读取插件保存目录（读不到不影响贴图）
   try {
     const kv = await window.api.plugins.kv('screenshot-tool', 'get', 'settings')

@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>长截图</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+    body {
+      background: rgba(30, 30, 34, 0.97); color: #ddd;
+      font-family: "Microsoft YaHei", system-ui, sans-serif; font-size: 12px;
+      user-select: none; border-radius: 10px;
+    }
+    #bar {
+      display: flex; align-items: center; gap: 10px;
+      height: 100vh; box-sizing: border-box; padding: 8px 12px;
+    }
+    #thumb {
+      width: 62px; height: 46px; object-fit: contain; flex: none;
+      background: #17171a; border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;
+    }
+    #main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+    .row { display: flex; align-items: center; gap: 6px; }
+    button {
+      border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px;
+      cursor: pointer; font-family: inherit; line-height: 1;
+      background: #3c3d42; color: #ddd;
+    }
+    button:hover { background: #4a4b52; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.primary { background: #1971c2; color: #fff; }
+    button.success { background: #2f9e44; color: #fff; }
+    button.danger { background: #5c2b2b; color: #ffb4b4; }
+    .seg { display: flex; border-radius: 6px; overflow: hidden; flex: none; }
+    .seg button { border-radius: 0; padding: 6px 12px; }
+    .seg button.is-active { background: #1971c2; color: #fff; }
+    #stat { color: #9ec3e8; white-space: nowrap; }
+    #hint { flex: 1; min-width: 0; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hidden { display: none !important; }
+    /* 背景拖动区：标题栏式拖动（按钮自动排除） */
+    #bar { -webkit-app-region: drag; }
+    #bar button, #thumb { -webkit-app-region: no-drag; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <img id="thumb" alt="" />
+    <div id="main">
+      <div class="row">
+        <div class="seg">
+          <button id="m-manual" class="is-active">手动</button>
+          <button id="m-auto">自动</button>
+        </div>
+        <button id="btn-grab" class="primary">抓取下一屏</button>
+        <button id="btn-start" class="primary hidden">开始滚动</button>
+        <button id="btn-stop" class="danger hidden">停止</button>
+        <span id="stat">准备中…</span>
+      </div>
+      <div class="row">
+        <button id="btn-edit" class="success" disabled>完成并标注</button>
+        <button id="btn-done">复制</button>
+        <button id="btn-save">保存</button>
+        <button id="btn-pin">贴图</button>
+        <span id="hint" role="status">滚动目标页面后点「抓取下一屏」；或切「自动」自动翻页抓帧</span>
+        <button id="btn-cancel" class="danger" title="放弃">取消</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="./longshot-bar.js"></script>
+</body>
+</html>

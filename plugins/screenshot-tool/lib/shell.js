@@ -10,179 +10,49 @@ export const SHELLS = [
   { id: 'frame', name: '简约相框' }
 ]
 
-function roundRectPath(g, x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2)
-  g.beginPath()
-  g.moveTo(x + rr, y)
-  g.arcTo(x + w, y, x + w, y + h, rr)
-  g.arcTo(x + w, y + h, x, y + h, rr)
-  g.arcTo(x, y + h, x, y, rr)
-  g.arcTo(x, y, x + w, y, rr)
-  g.closePath()
+export const PLAIN = Object.freeze({ rounded: false, radius: 16, shell: 'none' })
+export function appearance(value = {}) {
+  return { rounded: value?.rounded === true,
+    radius: Number.isFinite(value?.radius) ? Math.max(0, Math.min(256, Math.round(value.radius))) : PLAIN.radius,
+    shell: SHELLS.some(s => s.id === value?.shell) ? value.shell : 'none' }
 }
 
-function trafficLights(g, x, y) {
-  const colors = ['#ff5f57', '#febc2e', '#28c840']
-  colors.forEach((c, i) => {
-    g.beginPath()
-    g.arc(x + i * 22, y, 7, 0, Math.PI * 2)
-    g.fillStyle = c
-    g.fill()
-  })
-}
-
-/** 通用窗口壳：topBar 高度内画红绿灯 + 可选地址栏，内容区圆角裁剪 */
-function windowShell(base, { dark, addressBar, barH = 48 }) {
-  const pad = 24 // 壳体留白
-  const margin = 28 // 透明外边距（放阴影）
-  const radius = 14
-  const W = base.width
-  const H = base.height
-  const bodyW = W + pad * 2
-  const bodyH = barH + H + pad
-  const canvas = document.createElement('canvas')
-  canvas.width = bodyW + margin * 2
-  canvas.height = bodyH + margin * 2
-  const g = canvas.getContext('2d')
-
-  // 阴影
-  g.save()
-  g.shadowColor = 'rgba(0,0,0,0.35)'
-  g.shadowBlur = 24
-  g.shadowOffsetY = 6
-  g.fillStyle = dark ? '#202124' : '#f6f6f8'
-  roundRectPath(g, margin, margin, bodyW, bodyH, radius)
-  g.fill()
-  g.restore()
-
-  // 顶栏
-  g.save()
-  roundRectPath(g, margin, margin, bodyW, bodyH, radius)
-  g.clip()
-  g.fillStyle = dark ? '#2b2c30' : '#ececef'
-  g.fillRect(margin, margin, bodyW, barH)
-  if (addressBar) {
-    const pillW = Math.min(480, bodyW * 0.55)
-    const pillX = margin + (bodyW - pillW) / 2
-    const pillY = margin + (barH - 26) / 2
-    g.fillStyle = dark ? '#3c3d42' : '#ffffff'
-    roundRectPath(g, pillX, pillY, pillW, 26, 13)
-    g.fill()
-    if (!dark) {
-      g.strokeStyle = '#d5d5da'
-      g.lineWidth = 1
-      g.stroke()
+// Same layout in source pixels for the checkerboard preview and the final PNG.
+// Decorations are never written back onto the editable document.
+export function renderOutput(base, options, maxSide = Infinity) {
+  const { rounded, radius, shell } = appearance(options)
+  if (!rounded && shell === 'none' && maxSide === Infinity) return base
+  const phone = shell === 'phone', framed = shell !== 'none', browser = shell.startsWith('browser-')
+  const dark = shell === 'browser-dark' || phone
+  const ratio = phone ? Math.min(1, 400 / base.width) : 1
+  const w = Math.max(1, Math.round(base.width * ratio)), h = Math.max(1, Math.round(base.height * ratio))
+  const pad = !framed ? 0 : phone ? 16 : 24, margin = framed ? 28 : 0
+  const top = browser ? 48 : shell === 'mac' ? 42 : pad
+  const bodyW = w + 2 * pad, bodyH = h + top + pad
+  const W = bodyW + 2 * margin, H = bodyH + 2 * margin
+  const scale = Math.min(1, maxSide / Math.max(W,H))
+  const out = document.createElement('canvas')
+  out.width = Math.max(1,Math.round(W*scale)); out.height = Math.max(1,Math.round(H*scale))
+  const g = out.getContext('2d'); g.scale(out.width/W,out.height/H)
+  function box(x,y,bw,bh,r) {
+    g.beginPath(); g.roundRect(x,y,bw,bh,Math.min(r,bw/2,bh/2))
+  }
+  if (framed) {
+    g.save(); box(margin,margin,bodyW,bodyH,phone ? 46 : 14)
+    g.fillStyle = dark ? '#24262b' : '#fafafa'; g.shadowColor = '#0006'; g.shadowBlur = 20*scale; g.shadowOffsetY = 5*scale; g.fill(); g.restore()
+    if (browser || shell === 'mac') {
+      g.save(); box(margin,margin,bodyW,bodyH,14); g.clip()
+      g.fillStyle = dark ? '#34363b' : '#e7e8ed'; g.fillRect(margin,margin,bodyW,top)
+      if (browser && bodyW > 160) {
+        const pill = Math.min(480,bodyW-110); box(margin+(bodyW-pill)/2+25, margin+12,pill,24,12)
+        g.fillStyle = dark ? '#51545b' : '#fff'; g.fill()
+      }
+      ;['#ff5f57','#febc2e','#28c840'].forEach((color,i) => {
+        g.beginPath(); g.arc(margin+16+17*i,margin+top/2,5,0,Math.PI*2); g.fillStyle=color; g.fill()
+      }); g.restore()
     }
   }
-  trafficLights(g, margin + 20, margin + barH / 2)
-
-  // 内容区
-  g.fillStyle = dark ? '#202124' : '#ffffff'
-  g.fillRect(margin, margin + barH, bodyW, bodyH - barH)
-  g.drawImage(base, margin + pad, margin + barH)
-  g.restore()
-  return canvas
-}
-
-function phoneShell(base) {
-  const bezel = 16
-  const margin = 28
-  const radius = 46
-  const screenRadius = 34
-  // 内容按手机屏宽缩放
-  const targetW = 400
-  const scale = targetW / base.width
-  const contentH = Math.round(base.height * scale)
-  const bodyW = targetW + bezel * 2
-  const bodyH = contentH + bezel * 2
-  const canvas = document.createElement('canvas')
-  canvas.width = bodyW + margin * 2
-  canvas.height = bodyH + margin * 2
-  const g = canvas.getContext('2d')
-
-  g.save()
-  g.shadowColor = 'rgba(0,0,0,0.4)'
-  g.shadowBlur = 24
-  g.shadowOffsetY = 6
-  g.fillStyle = '#101014'
-  roundRectPath(g, margin, margin, bodyW, bodyH, radius)
-  g.fill()
-  g.restore()
-
-  g.save()
-  roundRectPath(g, margin, margin, bodyW, bodyH, radius)
-  g.clip()
-  g.fillStyle = '#101014'
-  g.fillRect(0, 0, canvas.width, canvas.height)
-  // 屏幕
-  const sx = margin + bezel
-  const sy = margin + bezel
-  g.fillStyle = '#000000'
-  roundRectPath(g, sx, sy, targetW, contentH, screenRadius)
-  g.save()
-  g.clip()
-  g.drawImage(base, sx, sy, targetW, contentH)
-  // 打孔摄像头
-  g.beginPath()
-  g.arc(sx + targetW / 2, sy + 14, 9, 0, Math.PI * 2)
-  g.fillStyle = '#000000'
-  g.fill()
-  g.beginPath()
-  g.arc(sx + targetW / 2, sy + 14, 6, 0, Math.PI * 2)
-  g.fillStyle = '#1c1c22'
-  g.fill()
-  g.restore()
-  g.restore()
-  return canvas
-}
-
-function frameShell(base) {
-  const border = 24
-  const margin = 28
-  const radius = 10
-  const bodyW = base.width + border * 2
-  const bodyH = base.height + border * 2
-  const canvas = document.createElement('canvas')
-  canvas.width = bodyW + margin * 2
-  canvas.height = bodyH + margin * 2
-  const g = canvas.getContext('2d')
-  g.save()
-  g.shadowColor = 'rgba(0,0,0,0.3)'
-  g.shadowBlur = 24
-  g.shadowOffsetY = 6
-  g.fillStyle = '#ffffff'
-  roundRectPath(g, margin, margin, bodyW, bodyH, radius)
-  g.fill()
-  g.restore()
-  g.save()
-  roundRectPath(g, margin, margin, bodyW, bodyH, radius)
-  g.clip()
-  g.fillStyle = '#ffffff'
-  g.fillRect(0, 0, canvas.width, canvas.height)
-  g.drawImage(base, margin + border, margin + border)
-  g.restore()
-  return canvas
-}
-
-/** 给截图套壳；shellId 见 SHELLS（none 返回原图副本） */
-export function applyShell(base, shellId) {
-  switch (shellId) {
-    case 'browser-dark':
-      return windowShell(base, { dark: true, addressBar: true })
-    case 'browser-light':
-      return windowShell(base, { dark: false, addressBar: true })
-    case 'mac':
-      return windowShell(base, { dark: false, addressBar: false, barH: 42 })
-    case 'phone':
-      return phoneShell(base)
-    case 'frame':
-      return frameShell(base)
-    default: {
-      const copy = document.createElement('canvas')
-      copy.width = base.width
-      copy.height = base.height
-      copy.getContext('2d').drawImage(base, 0, 0)
-      return copy
-    }
-  }
+  box(margin+pad,margin+top,w,h,rounded ? radius*ratio : 0); g.clip()
+  g.drawImage(base,margin+pad,margin+top,w,h)
+  return out
 }

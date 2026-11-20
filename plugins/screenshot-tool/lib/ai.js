@@ -1,7 +1,9 @@
 // AI 能力封装：识图/OCR 走多模态 chat（图片部件），翻译走文本 chat，
-// 图生图走 ai.generateImage 的 image2image 模式。供应商与模型来自应用内 AI 配置。
+// 图生图走 ai.generateImage 的 image2image 模式。
+// 配置两种模式（settings.aiMode）：direct=插件内独立配置（ai.chatDirect 直连），
+// app=复用主程序 AI 工作台供应商。resolveAi() 统一解析，遮罩页与工作台共用。
 
-/** 供应商列表（渲染层视图：apiKey 已脱敏） */
+/** 供应商列表（渲染层视图：apiKey 已脱敏），app 模式用 */
 export async function listProviders() {
   const providers = (await window.api.ai.providers.list()) || []
   return providers.filter((p) => p.enabled !== false)
@@ -22,8 +24,49 @@ export function findProvider(providers, id) {
   return providers.find((p) => p.id === id) || null
 }
 
-/** 多模态识图：一张图 + 一段提问 */
-export async function visionChat({ providerId, model, prompt, imageDataUrl, system }) {
+// ---- 配置解析（两种模式归一） ----
+
+/**
+ * 解析插件设置为统一 AI 配置；不可用返回 null。
+ * @returns {{ mode:'direct'|'app', protocol?, baseUrl?, apiKey?, providerId?, visionModel, chatModel, imageModel? } | null}
+ */
+export function resolveAi(settings) {
+  if (!settings) return null
+  if (settings.aiMode === 'app') {
+    if (!settings.providerId) return null
+    return {
+      mode: 'app',
+      providerId: settings.providerId,
+      visionModel: settings.visionModel || '',
+      chatModel: settings.chatModel || '',
+      imageModel: settings.imageModel || ''
+    }
+  }
+  const d = settings.direct || {}
+  if (!d.baseUrl || !d.apiKey) return null
+  return {
+    mode: 'direct',
+    protocol: d.protocol || 'chat',
+    baseUrl: d.baseUrl,
+    apiKey: d.apiKey,
+    visionModel: d.visionModel || '',
+    chatModel: d.chatModel || ''
+  }
+}
+
+/** 是否具备识图（多模态）条件 */
+export function visionReady(ai) {
+  return !!(ai && ai.visionModel)
+}
+
+/** 是否具备文本对话（翻译）条件 */
+export function chatReady(ai) {
+  return !!(ai && ai.chatModel)
+}
+
+/** 多模态识图（统一入口，ai = resolveAi 结果）：一张图 + 一段提问 */
+export async function visionChatResolved(ai, { prompt, imageDataUrl, system }) {
+  if (!visionReady(ai)) throw new Error('未配置识图模型，请到「设置」中配置')
   const messages = []
   if (system) messages.push({ role: 'system', content: system })
   messages.push({
@@ -33,20 +76,66 @@ export async function visionChat({ providerId, model, prompt, imageDataUrl, syst
       { type: 'image_url', image_url: { url: imageDataUrl } }
     ]
   })
-  const res = await window.api.ai.chat({ providerId, model, messages })
+  if (ai.mode === 'direct') {
+    const res = await window.api.ai.chatDirect({
+      protocol: ai.protocol,
+      baseUrl: ai.baseUrl,
+      apiKey: ai.apiKey,
+      model: ai.visionModel,
+      messages
+    })
+    return res.text
+  }
+  const res = await window.api.ai.chat({ providerId: ai.providerId, model: ai.visionModel, messages })
   return res.text
 }
 
-/** 纯文本对话（翻译等） */
-export async function textChat({ providerId, model, prompt, system }) {
+/** 纯文本对话（翻译等，统一入口） */
+export async function textChatResolved(ai, { prompt, system }) {
+  if (!chatReady(ai)) throw new Error('未配置文本模型，请到「设置」中配置')
   const messages = []
   if (system) messages.push({ role: 'system', content: system })
   messages.push({ role: 'user', content: prompt })
-  const res = await window.api.ai.chat({ providerId, model, messages })
+  if (ai.mode === 'direct') {
+    const res = await window.api.ai.chatDirect({
+      protocol: ai.protocol,
+      baseUrl: ai.baseUrl,
+      apiKey: ai.apiKey,
+      model: ai.chatModel,
+      messages
+    })
+    return res.text
+  }
+  const res = await window.api.ai.chat({ providerId: ai.providerId, model: ai.chatModel, messages })
   return res.text
 }
 
-/** 图生图：返回 [{name, dataUrl, width?, height?}] */
+/** 兼容旧签名：多模态识图（显式供应商 + 模型） */
+export async function visionChat({ providerId, model, prompt, imageDataUrl, system }) {
+  return visionChatResolved({ mode: 'app', providerId, visionModel: model }, { prompt, imageDataUrl, system })
+}
+
+/** 兼容旧签名：纯文本对话（显式供应商 + 模型） */
+export async function textChat({ providerId, model, prompt, system }) {
+  return textChatResolved({ mode: 'app', providerId, chatModel: model }, { prompt, system })
+}
+
+/** 独立配置测试连接：发一条最小对话验证协议/地址/密钥 */
+export async function testDirectAi({ protocol = 'chat', baseUrl, apiKey, model }) {
+  if (!baseUrl) throw new Error('请填写接口地址')
+  if (!model) throw new Error('请填写模型名')
+  const res = await window.api.ai.chatDirect({
+    protocol,
+    baseUrl,
+    apiKey,
+    model,
+    messages: [{ role: 'user', content: 'ping' }],
+    maxTokens: 8
+  })
+  return res.text
+}
+
+/** 图生图：返回 [{name, dataUrl, width?, height?}]（仅 app 模式支持） */
 export async function imageToImage({ providerId, model, prompt, imageDataUrl }) {
   return window.api.ai.generateImage({
     providerId,
