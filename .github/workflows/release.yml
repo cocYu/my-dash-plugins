@@ -91,7 +91,12 @@ jobs:
           set -euo pipefail
           remote="https://oauth2:${GITEE_TOKEN}@gitee.com/${TOOLS_GITEE_REPO}.git"
           git push "$remote" main
-          git push "$remote" "refs/tags/${TAG}"
+          # tag 可能已经存在（本地手动推过 / 上一次运行推过），已存在就跳过而不是让整步失败
+          if git ls-remote --tags --exit-code "$remote" "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Gitee 已存在 tag ${TAG}，跳过推送"
+          else
+            git push "$remote" "refs/tags/${TAG}"
+          fi
           export GITEE_OWNER="${TOOLS_GITEE_REPO%%/*}"
           export GITEE_REPO="${TOOLS_GITEE_REPO##*/}"
           node scripts/publish-gitee.mjs --tag "$TAG" --dir dist
