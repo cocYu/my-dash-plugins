@@ -25,7 +25,7 @@ concurrency:
 env:
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   # 可用仓库变量覆盖（Settings → Variables）：GITEE_REPO = owner/repo
-  TOOLS_GITEE_REPO: ${{ vars.GITEE_REPO || 'yukai1998/AtoZPlugins' }}
+  TOOLS_GITEE_REPO: ${{ vars.GITEE_REPO || 'yukai1998/my-dash-plugins' }}
 
 jobs:
   publish:

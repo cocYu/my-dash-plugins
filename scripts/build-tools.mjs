@@ -10,8 +10,8 @@
  *   --src <dir>          插件根目录，默认 plugins
  *   --out <dir>          输出目录，默认 dist
  *   --tag <tag>          发布标签（如 v0.1.0），用于拼 Release 下载地址
- *   --github-repo <o/r>  GitHub 仓库，默认 cocYu/AtoZPlugins
- *   --gitee-repo <o/r>   Gitee 仓库，默认 yukai1998/AtoZPlugins
+ *   --github-repo <o/r>  GitHub 仓库，默认 cocYu/my-dash-plugins
+ *   --gitee-repo <o/r>   Gitee 仓库，默认 yukai1998/my-dash-plugins
  *   --primary <gitee|github>  首选下载源，默认 gitee（境内直连快）
  *   --base-url <url>     本地/自建服务器前缀（本地验证用）
  *   --only <ids>         只处理指定插件（逗号分隔）
@@ -47,8 +47,8 @@ const hasFlag = (name) => process.argv.includes(name)
 const srcDir = path.resolve(root, argValue('--src') || 'plugins')
 const outDir = path.resolve(root, argValue('--out') || 'dist')
 const tag = argValue('--tag') || process.env.TOOLS_TAG || ''
-const githubRepo = argValue('--github-repo') || process.env.TOOLS_GITHUB_REPO || 'cocYu/AtoZPlugins'
-const giteeRepo = argValue('--gitee-repo') || process.env.TOOLS_GITEE_REPO || 'yukai1998/AtoZPlugins'
+const githubRepo = argValue('--github-repo') || process.env.TOOLS_GITHUB_REPO || 'cocYu/my-dash-plugins'
+const giteeRepo = argValue('--gitee-repo') || process.env.TOOLS_GITEE_REPO || 'yukai1998/my-dash-plugins'
 const baseUrl = argValue('--base-url').replace(/\/+$/, '')
 const primary = (argValue('--primary') || 'gitee').toLowerCase()
 const only = new Set(

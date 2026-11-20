@@ -9,7 +9,7 @@
  * 环境变量：
  *   GITEE_TOKEN    必填，私人令牌（projects 权限）
  *   GITEE_OWNER    默认 yukai1998
- *   GITEE_REPO     默认 AtoZPlugins
+ *   GITEE_REPO     默认 my-dash-plugins
  *   GITEE_API_BASE 默认 https://gitee.com/api/v5
  *   GITEE_BRANCH   创建 Release 时关联的分支，默认 main
  */
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const API = process.env.GITEE_API_BASE || 'https://gitee.com/api/v5'
 const owner = process.env.GITEE_OWNER || 'yukai1998'
-const repo = process.env.GITEE_REPO || 'AtoZPlugins'
+const repo = process.env.GITEE_REPO || 'my-dash-plugins'
 const token = process.env.GITEE_TOKEN || ''
 
 function argValue(name) {

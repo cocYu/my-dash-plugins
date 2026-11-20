@@ -1,5 +1,5 @@
 {
-  "name": "atoz-plugins",
+  "name": "my-dash-plugins",
   "version": "0.1.0",
   "private": true,
   "description": "AtoZ 插件中心：插件源码、打包与发行",

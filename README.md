@@ -10,7 +10,7 @@ AtoZ 桌面应用的插件（工具箱工具 / 页面 / 仪表盘小组件）源
 ## 目录结构
 
 ```
-AtoZPlugins/
+my-dash-plugins/
 ├── plugins/                     # 插件源码，一个子目录一个插件
 │   ├── hello-tool/
 │   │   ├── plugin.json
@@ -88,8 +88,8 @@ git push github v0.1.0        # GitHub（流水线跑在这里）
     "version": "0.1.0",
     "description": "…",
     "category": "其他",
-    "downloadUrl": "https://gitee.com/yukai1998/AtoZPlugins/releases/download/v0.1.0/hello-tool-0.1.0.zip",
-    "mirrors": ["https://github.com/cocYu/AtoZPlugins/releases/download/v0.1.0/hello-tool-0.1.0.zip"],
+    "downloadUrl": "https://gitee.com/yukai1998/my-dash-plugins/releases/download/v0.1.0/hello-tool-0.1.0.zip",
+    "mirrors": ["https://github.com/cocYu/my-dash-plugins/releases/download/v0.1.0/hello-tool-0.1.0.zip"],
     "sha256": "8dd364b8…",
     "size": 1294
   }
@@ -102,12 +102,12 @@ git push github v0.1.0        # GitHub（流水线跑在这里）
 
 ## 首次配置（推到远程前）
 
-1. 在 Gitee / GitHub 各建一个**空仓库** `AtoZPlugins`（不要初始化 README）
+1. 在 Gitee / GitHub 各建一个**空仓库** `my-dash-plugins`（不要初始化 README）
 2. 关联远程并推送：
 
 ```bash
-git remote add origin git@gitee.com:yukai1998/AtoZPlugins.git
-git remote add github https://github.com/cocYu/AtoZPlugins.git
+git remote add origin git@gitee.com:yukai1998/my-dash-plugins.git
+git remote add github https://github.com/cocYu/my-dash-plugins.git
 git push -u origin main
 git push github main
 ```
