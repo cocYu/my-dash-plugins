@@ -9,8 +9,8 @@
     "mirrors": [
       "https://github.com/cocYu/my-dash-plugins/releases/download/v0.1.0/hello-tool-0.1.0.zip"
     ],
-    "sha256": "57edd20b691a12049fe2b759c4ec5e1964870d2f92786c1b05fdf97190964d4a",
-    "size": 1314
+    "sha256": "ea9790c3c3794c254dbea0160b48fbe8558cf0bd698ca9c75dc667aa92136fc9",
+    "size": 1307
   },
   {
     "id": "notes-stats",
@@ -22,7 +22,7 @@
     "mirrors": [
       "https://github.com/cocYu/my-dash-plugins/releases/download/v0.1.0/notes-stats-0.1.0.zip"
     ],
-    "sha256": "eaf1a0c45416bbb08e1252323dc121833e138fc125bbbc07c78ed28f6a80ff22",
-    "size": 1771
+    "sha256": "19d18cb5427a5d7580121eae591f54032d133602afdcd3742c10b0aa69e90e7c",
+    "size": 1768
   }
 ]
