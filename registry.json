@@ -5,9 +5,9 @@
     "version": "0.1.0",
     "description": "演示 ctx.registerTool：把插件注册为工具箱里的一个工具",
     "category": "示例",
-    "downloadUrl": "https://gitee.com/yukai1998/my-dash-plugins/releases/download/v0.1.0/hello-tool-0.1.0.zip",
+    "downloadUrl": "https://gitee.com/yukai1998/my-dash-plugins/releases/download/v0.2.0/hello-tool-0.1.0.zip",
     "mirrors": [
-      "https://github.com/cocYu/my-dash-plugins/releases/download/v0.1.0/hello-tool-0.1.0.zip"
+      "https://github.com/cocYu/my-dash-plugins/releases/download/v0.2.0/hello-tool-0.1.0.zip"
     ],
     "sha256": "ea9790c3c3794c254dbea0160b48fbe8558cf0bd698ca9c75dc667aa92136fc9",
     "size": 1307
@@ -18,11 +18,24 @@
     "version": "0.1.0",
     "description": "示例插件：仪表盘笔记总数卡片 + 统计页（最新笔记、KV 打开计数），演示页面/小组件/业务数据读取/命名空间存储",
     "category": "统计",
-    "downloadUrl": "https://gitee.com/yukai1998/my-dash-plugins/releases/download/v0.1.0/notes-stats-0.1.0.zip",
+    "downloadUrl": "https://gitee.com/yukai1998/my-dash-plugins/releases/download/v0.2.0/notes-stats-0.1.0.zip",
     "mirrors": [
-      "https://github.com/cocYu/my-dash-plugins/releases/download/v0.1.0/notes-stats-0.1.0.zip"
+      "https://github.com/cocYu/my-dash-plugins/releases/download/v0.2.0/notes-stats-0.1.0.zip"
     ],
     "sha256": "19d18cb5427a5d7580121eae591f54032d133602afdcd3742c10b0aa69e90e7c",
     "size": 1768
+  },
+  {
+    "id": "screenshot-tool",
+    "name": "截图",
+    "version": "0.1.0",
+    "description": "全屏/窗口/区域/长图截图，标注（画笔/马赛克/文字/箭头/图形/高亮/步骤序号）、带壳截图、贴图置顶、OCR 文字提取、翻译、AI 识图与图生图，历史记录",
+    "category": "图像",
+    "downloadUrl": "https://gitee.com/yukai1998/my-dash-plugins/releases/download/v0.2.0/screenshot-tool-0.1.0.zip",
+    "mirrors": [
+      "https://github.com/cocYu/my-dash-plugins/releases/download/v0.2.0/screenshot-tool-0.1.0.zip"
+    ],
+    "sha256": "fd963f290bffc0379689a215e1f9580cd0b304a8ac2c5b6b886fec552a9ecc6c",
+    "size": 37476
   }
 ]
