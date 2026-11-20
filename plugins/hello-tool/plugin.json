@@ -1,0 +1,11 @@
+{
+  "id": "hello-tool",
+  "name": "Hello 工具示例",
+  "version": "0.1.0",
+  "description": "演示 ctx.registerTool：把插件注册为工具箱里的一个工具",
+  "main": "index.js",
+  "permissions": [
+    "storage"
+  ],
+  "category": "示例"
+}

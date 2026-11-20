@@ -1,0 +1,28 @@
+[
+  {
+    "id": "hello-tool",
+    "name": "Hello 工具示例",
+    "version": "0.1.0",
+    "description": "演示 ctx.registerTool：把插件注册为工具箱里的一个工具",
+    "category": "示例",
+    "downloadUrl": "https://gitee.com/yukai1998/AtoZPlugins/releases/download/v0.1.0/hello-tool-0.1.0.zip",
+    "mirrors": [
+      "https://github.com/cocYu/AtoZPlugins/releases/download/v0.1.0/hello-tool-0.1.0.zip"
+    ],
+    "sha256": "57edd20b691a12049fe2b759c4ec5e1964870d2f92786c1b05fdf97190964d4a",
+    "size": 1314
+  },
+  {
+    "id": "notes-stats",
+    "name": "笔记统计",
+    "version": "0.1.0",
+    "description": "示例插件：仪表盘笔记总数卡片 + 统计页（最新笔记、KV 打开计数），演示页面/小组件/业务数据读取/命名空间存储",
+    "category": "统计",
+    "downloadUrl": "https://gitee.com/yukai1998/AtoZPlugins/releases/download/v0.1.0/notes-stats-0.1.0.zip",
+    "mirrors": [
+      "https://github.com/cocYu/AtoZPlugins/releases/download/v0.1.0/notes-stats-0.1.0.zip"
+    ],
+    "sha256": "eaf1a0c45416bbb08e1252323dc121833e138fc125bbbc07c78ed28f6a80ff22",
+    "size": 1771
+  }
+]

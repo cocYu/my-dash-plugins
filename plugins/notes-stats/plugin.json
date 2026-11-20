@@ -1,0 +1,12 @@
+{
+  "id": "notes-stats",
+  "name": "笔记统计",
+  "version": "0.1.0",
+  "description": "示例插件：仪表盘笔记总数卡片 + 统计页（最新笔记、KV 打开计数），演示页面/小组件/业务数据读取/命名空间存储",
+  "main": "index.js",
+  "permissions": [
+    "notes:read",
+    "storage"
+  ],
+  "category": "统计"
+}

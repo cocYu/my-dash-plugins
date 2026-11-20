@@ -1,0 +1,97 @@
+name: Release
+
+# 推送 vX.Y.Z tag（或手动运行）→ 校验/打包 plugins/ → 发 GitHub Release →
+# 回写 registry.json → 镜像到 Gitee Release。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布标签（必须已存在，如 v0.1.0）'
+        required: true
+      plugins:
+        description: '只发布指定插件（逗号分隔，留空=全部）'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  # 可用仓库变量覆盖（Settings → Variables）：GITEE_REPO = owner/repo
+  TOOLS_GITEE_REPO: ${{ vars.GITEE_REPO || 'yukai1998/AtoZPlugins' }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # 未配置时跳过 Gitee 镜像；应用侧会回退到 jsDelivr / GitHub raw
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 回写索引后要 push main，镜像时还要推 tag
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 校验并打包
+        run: |
+          set -euo pipefail
+          extra=""
+          if [ -n "${{ inputs.plugins }}" ]; then extra="--only ${{ inputs.plugins }}"; fi
+          node scripts/build-tools.mjs --tag "$TAG" --gitee-repo "$TOOLS_GITEE_REPO" --registry registry.json $extra
+
+      - name: 发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --title "插件中心 ${TAG}" \
+              --notes-file dist/release-notes.md
+          gh release upload "$TAG" dist/*.zip --clobber
+
+      - name: 回写索引到 main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 先把生成的索引挪出工作区，避免切分支时冲突
+          cp registry.json /tmp/registry.json
+          git checkout -- registry.json
+          git fetch origin main
+          git checkout -B main origin/main
+          cp /tmp/registry.json registry.json
+          git add registry.json
+          if git diff --cached --quiet; then
+            echo "索引无变化，跳过提交"
+          else
+            git commit -m "chore: 更新索引 ${TAG}"
+            git push origin main
+          fi
+
+      - name: 镜像到 Gitee
+        if: env.GITEE_TOKEN != ''
+        run: |
+          set -euo pipefail
+          remote="https://oauth2:${GITEE_TOKEN}@gitee.com/${TOOLS_GITEE_REPO}.git"
+          git push "$remote" main
+          git push "$remote" "refs/tags/${TAG}"
+          export GITEE_OWNER="${TOOLS_GITEE_REPO%%/*}"
+          export GITEE_REPO="${TOOLS_GITEE_REPO##*/}"
+          node scripts/publish-gitee.mjs --tag "$TAG" --dir dist
