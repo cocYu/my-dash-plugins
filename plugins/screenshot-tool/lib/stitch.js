@@ -45,6 +45,12 @@ export function createStitcher() {
       const overlap = overlapRows(previous, rows)
       const height = base?.height || 0
       const cap = Math.min(30000, Math.floor(48_000_000 / frame.width))
+      // A few matching rows (or a flat background) are not evidence of scrolling.
+      // Keep the last accepted frame as the anchor so the user can scroll back.
+      if (base && overlap !== frame.height && (overlap < Math.min(12, frame.height) ||
+          !rows.subarray(0, overlap).some(row => row !== rows[0]))) {
+        return { added:0, height, overlap, unmatched:true }
+      }
       const added = Math.max(0, Math.min(frame.height - overlap, cap - height))
       if (added) {
         const out = document.createElement('canvas')

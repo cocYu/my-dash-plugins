@@ -58,3 +58,35 @@ test('output preferences default to unmodified PNG and clamp invalid values',asy
   assert.deepEqual(appearance({rounded:true,radius:999,shell:'not-a-shell'}),{rounded:true,radius:256,shell:'none'})
   const base={width:40,height:20};assert.equal(renderOutput(base,PLAIN),base)
 })
+
+test('editing selected text changes only that object, using immutable undo checkpoints', async () => {
+  const {createEditorCore} = await import('../plugins/screenshot-tool/lib/editor.js')
+  const g = {clearRect(){},drawImage(){},save(){},restore(){},measureText(){return {width:80}}}
+  const canvas = {width:200,height:120,getContext:()=>g,getBoundingClientRect:()=>({left:0,top:0,width:200,height:120})}; g.canvas=canvas
+  const before = globalThis.requestAnimationFrame; globalThis.requestAnimationFrame=()=>0
+  try {
+    const ed=createEditorCore(); ed.load(canvas);ed.attach(canvas);ed.selectTool('text')
+    const click=(x,y)=>{ed.onPointerDown({button:0,clientX:x,clientY:y,preventDefault(){}});ed.onPointerUp()}
+    for (const [y,text] of [[5,'第一条文字'],[74,'第二条文字']]) {click(4,y);ed.state.textEditing.value=text;ed.commitText()}
+    const [first, second] = ed.state.shapes
+    ed.selectTool('select');click(78,10);assert.equal(ed.selected.id,first.id)
+    ed.editSelectedText();ed.state.textEditing.value='已修改';ed.commitText();ed.setMeasure(45);ed.setColor('#1267bd')
+    assert.deepEqual(ed.selected,{...first,text:'已修改',size:45,color:'#1267bd'})
+    ed.onKeydown({key:'ArrowRight',shiftKey:true,preventDefault(){}});assert.equal(ed.selected.x,14)
+    assert.equal(ed.state.color,'#e64545');assert.equal(ed.state.fontSize,20);assert.equal(ed.state.shapes[1],second)
+    for(let i=0;i<4;i++) ed.undo();assert.deepEqual(ed.state.shapes,[first,second]);ed.redo();assert.equal(ed.state.shapes[0].text,'已修改')
+  } finally {globalThis.requestAnimationFrame=before}
+})
+
+test('auto scroll pauses after three unchanged frames and falls back on denied input', {timeout:2000}, async () => {
+  const {createScrollSession} = await import('../plugins/screenshot-tool/lib/scroll-session.js')
+  let keys=0, captures=0, allow=true, changed
+  const session=createScrollSession({interval:1,sendKey:async()=>({ok:(keys++,allow),message:'权限不足'}),capture:async()=>{captures++;return {noNew:true}},
+    onMode:(mode,msg)=>{if(msg) changed({mode,msg})},onResult:()=>{},onError:e=>{throw e}})
+  try {
+    let transition=new Promise(r=>changed=r);session.switchTo('auto');assert.equal((await transition).mode,'paused')
+    assert.equal(keys,3);assert.equal(captures,3)
+    allow=false;transition=new Promise(r=>changed=r);session.switchTo('auto');const fallback=await transition
+    assert.equal(fallback.mode,'manual');assert.match(fallback.msg,/权限/);assert.equal(captures,3)
+  } finally {await session.stop()}
+})

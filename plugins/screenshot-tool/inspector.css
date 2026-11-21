@@ -1,0 +1,7 @@
+.st-inspector,.st-palette {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.st-inspector [hidden],.st-inspector small:empty {display:none!important}
+.st-inspector small {font-size:12px}.st-inspector label {white-space:nowrap;font-size:13px}
+.st-inspector .st-swatch {box-sizing:border-box;width:23px;height:23px;padding:0;border:1px solid #888;border-radius:50%;cursor:pointer;font:bold 16px/1 system-ui;color:#fff;text-shadow:0 1px 3px #000,0 0 2px #000}
+.st-inspector .st-swatch[aria-pressed=true] {outline:2px solid currentColor;outline-offset:1px;box-shadow:0 0 0 4px #293849}
+.st-palette input {width:28px;height:24px;cursor:pointer;padding:0}.st-palette output {font:12px ui-monospace,monospace;min-width:8ch}
+.st-measure input {width:4em}.st-inspector button:focus-visible {outline:3px dashed Highlight;outline-offset:2px}

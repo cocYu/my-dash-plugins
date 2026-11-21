@@ -2,11 +2,8 @@ import { renderOutput } from './lib/shell.js'
 import { canvasBytes } from './lib/history.js'
 // 长截图控制条：由区域截图遮罩页经 capture:start-longshot 转场而来（主进程创建本窗口，
 // 内容保护不进画面、focusable:false 不抢目标窗口焦点）。
-// 流程：get-longshot-init 取选区与首帧 → 手动模式（用户滚动后点抓取）或
-// 自动模式（循环：抓帧 → 拼接 → 无新内容自动停 → sendKey 翻页 → 等间隔）。
-// 拼接复用 lib/stitch.js（行哈希重叠对齐）；完成动作：复制/保存/贴图/取消。
-
 import { copyPng, loadImageToCanvas } from './lib/capture.js'
+import { createScrollSession } from './lib/scroll-session.js'
 import { createStitcher } from './lib/stitch.js'
 import { loadWindowSettings } from './lib/store.js'
 
@@ -17,8 +14,6 @@ const statEl = document.getElementById('stat')
 const hintEl = document.getElementById('hint')
 const mManual = document.getElementById('m-manual')
 const mAuto = document.getElementById('m-auto')
-const btnGrab = document.getElementById('btn-grab')
-const btnStart = document.getElementById('btn-start')
 const btnStop = document.getElementById('btn-stop')
 const btnEdit = document.getElementById('btn-edit')
 let outputStyle
@@ -32,16 +27,8 @@ let pixelRect = null
 let rect = null // 选区（屏幕逻辑坐标）
 let stitcher = null
 let segments = 0
-let grabbing = false
-let mode = 'manual'
-let generation = 0
-let autoRunning = false
+let session = null
 let done = false
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
-// ---- 设置（控制条页无 ctx，直接走插件 KV） ----
-
 
 // ---- 工具 ----
 
@@ -118,8 +105,7 @@ function updateThumb() {
 }
 
 function setBusy(on) {
-  btnGrab.disabled = on
-  btnStart.disabled = on
+  mManual.disabled = mAuto.disabled = btnStop.disabled = on
   btnEdit.disabled = on || !window.api.capture.editLongshot
   btnDone.disabled = on
   btnSave.disabled = on
@@ -129,80 +115,32 @@ function setBusy(on) {
 // ---- 抓帧与拼接 ----
 
 async function grab() {
-  if (grabbing) return { noNew: false, truncated: false }
-  grabbing = true
-  try {
-    const frame = await window.api.capture.longshotFrame()
-    if (!frame) throw new Error('控制条已失效')
-    const c = await cropFrame(frame.dataUrl, frame.dpr)
-    const r = stitcher.append(c)
-    if (r.added) segments += 1
-    updateStat()
-    updateThumb()
-    if (r.noNew) hint('画面与上一帧相同：先滚动目标窗口再抓取')
-    return r
-  } finally {
-    grabbing = false
+  const frame = await window.api.capture.longshotFrame()
+  if (!frame) throw new Error('控制条已失效')
+  const result = stitcher.append(await cropFrame(frame.dataUrl, frame.dpr))
+  if (result.added) { segments++; updateStat(); updateThumb() }
+  return result
+}
+
+function showMode(mode, message) {
+  for (const [button, name] of [[mManual,'manual'], [mAuto,'auto'], [btnStop,'paused']]) {
+    button.classList.toggle('is-active', mode === name)
+    button.setAttribute('aria-pressed', String(mode === name))
   }
-}
-
-// ---- 模式 ----
-
-function setMode(m) {
-  mode = m
-  mManual.classList.toggle('is-active', m === 'manual')
-  mAuto.classList.toggle('is-active', m === 'auto')
-  btnGrab.classList.toggle('hidden', m !== 'manual')
-  btnStart.classList.toggle('hidden', m !== 'auto')
-  btnStop.classList.toggle('hidden', m !== 'auto')
-  if (m === 'auto' && !autoRunning) {
-    hint('将自动翻页抓帧：先点一下目标窗口让其保持前台，再点「开始滚动」')
-  } else if (m === 'manual') {
-    hint('滚动目标页面后点「抓取下一屏」；或切「自动」自动翻页抓帧')
-  }
-}
-
-async function startAuto() {
-  if (autoRunning) return
-  autoRunning = true
-  setBusy(true)
-  btnStop.disabled = false
-  hint('自动滚动中…（翻页键：' + scrollKeyLabel() + '）')
-  const run = ++generation
-  try {
-    while (autoRunning && run === generation) {
-      const sk = await window.api.capture.sendKey(settings.longshot.scrollKey)
-      if (run !== generation) return
-      if (!sk.ok) return stopAuto(sk.message || '自动翻页失败，已切回手动')
-      await sleep(Math.max(300, Number(settings.longshot.intervalMs) || 800))
-      if (run !== generation) return
-      const r = await grab()
-      if (run !== generation) return
-      if (r.truncated) return stopAuto('已达长图尺寸上限，已停止')
-      if (r.noNew) return stopAuto('没有新的画面，已停止自动滚动')
-    }
-  } catch (err) { if (run === generation) stopAuto(`抓帧失败：${err.message}`) }
-}
-
-function scrollKeyLabel() {
-  return { down: '↓', pagedown: 'PageDown', space: '空格' }[settings.longshot.scrollKey] || settings.longshot.scrollKey
-}
-
-function stopAuto(msg) {
-  generation++
-  autoRunning = false
-  setBusy(false)
-  setMode('manual')
-  if (msg) hint(msg)
+  hint(message || ({manual:'缓慢向下滚动目标页面，自动拼接', auto:'自动滚动并拼接中…', paused:'已暂停，可选择滚动方式继续'}[mode]))
 }
 
 // ---- 完成动作 ----
 
 async function finish(action) {
-  const source = stitcher?.result()
-  if (done || grabbing || autoRunning || !source) return
+  if (done || !session || !stitcher.result()) return
+  const wasActive = session.mode !== 'paused'
   done = true; setBusy(true)
   try {
+    await session.stop()
+    // Include the last scroll even if the user finishes between polling ticks.
+    if (wasActive) await grab().catch(() => {}) // Existing segments remain exportable.
+    const source = stitcher.result()
     if (action === 'edit') {
       // Transfer the undecorated full image. Decorations remain editable in the workspace.
       await window.api.capture.editLongshot(await canvasToDataUrl(source))
@@ -223,26 +161,20 @@ async function finish(action) {
 async function cancelAll() {
   if (done) return
   done = true
-  generation++
-  autoRunning = false
+  void session?.stop()
   try {
     await window.api.capture.cancelLongshot()
-  } catch {
-    /* 同上 */
+  } catch (err) {
+    done = false; hint(`取消失败：${err.message}`)
   }
 }
 
 // ---- 事件 ----
 
-mManual.addEventListener('click', () => {
-  if (!autoRunning) setMode('manual')
-})
-mAuto.addEventListener('click', () => {
-  if (!autoRunning) setMode('auto')
-})
-btnGrab.addEventListener('click', () => void grab().catch(err => hint(`抓帧失败：${err.message}`)))
-btnStart.addEventListener('click', () => void startAuto())
-btnStop.addEventListener('click', () => stopAuto('已停止自动滚动'))
+mManual.onclick = () => session?.switchTo('manual')
+mAuto.onclick = () => session?.switchTo('auto')
+btnStop.onclick = () => session?.switchTo('paused')
+window.addEventListener('pagehide', () => { void session?.stop() })
 btnEdit.addEventListener('click', () => void finish('edit'))
 btnDone.addEventListener('click', () => void finish('copy'))
 btnSave.addEventListener('click', () => void finish('save'))
@@ -260,7 +192,6 @@ async function init() {
     return
   }
   outputStyle = init.appearance ?? settings.appearance
-  setBusy(false)
   pixelRect = init.pixelRect
   rect = init.rect
   stitcher = createStitcher()
@@ -275,7 +206,13 @@ async function init() {
   }
   updateStat()
   updateThumb()
-  setMode('manual')
+  session = createScrollSession({capture:grab, sendKey:() => window.api.capture.sendKey(settings.longshot.scrollKey),
+    interval:Math.min(5000, Math.max(300, Number(settings.longshot.intervalMs) || 800)), onMode:showMode,
+    onResult:r => { if (r.unmatched) hint('缺少重叠；请向上滚回上一段，再缓慢向下滚动'); else if (r.added) hint('已拼接，可继续向下滚动') },
+    onError:err => hint(`抓帧失败，已暂停：${err.message}`)})
+  setBusy(false)
+  session.switchTo('manual')
 }
 
-void init()
+setBusy(true)
+void init().catch(err => hint(`无法开始长截图：${err.message}`))

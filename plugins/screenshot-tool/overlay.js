@@ -1,5 +1,5 @@
 import { chooseAppearance } from './lib/appearance-dialog.js'
-import { stepHint } from './lib/step.js'
+import { mountInspector } from './lib/inspector.js'
 import { copyPng } from './lib/capture.js'
 import { constrainSelection, imageBounds } from './lib/selection.js'
 // 区域截图遮罩页：展示主进程抓好的冻屏全帧 → 拖框选区 → 冻屏就地编辑 → 最终动作后关闭。
@@ -8,7 +8,7 @@ import { constrainSelection, imageBounds } from './lib/selection.js'
 // 复制/保存/贴图后 capture:finish-region 关遮罩并把结果推回主窗记历史。
 // 标注核心与主窗工作台共用（lib/editor.js 的 createEditorCore），交互行为一致。
 
-import { TOOLS, COLORS, createEditorCore } from './lib/editor.js'
+import { TOOLS, createEditorCore } from './lib/editor.js'
 import {
   OCR_PROMPT,
   RECOGNIZE_PROMPT,
@@ -83,9 +83,7 @@ const core = createEditorCore({
 // ---- 工具条构建 ----
 
 const toolBtns = []
-const colorBtns = []
-let sizeInput = null
-let fontInput = null
+let syncInspector
 let undoBtn = null
 let redoBtn = null
 
@@ -104,62 +102,7 @@ function buildEditbar() {
     toolBtns.push(b)
     ebToolsRow.appendChild(b)
   }
-  const sep1 = document.createElement('span')
-  sep1.className = 'eb-sep'
-  ebToolsRow.appendChild(sep1)
-  for (const c of COLORS) {
-    const b = document.createElement('button')
-    b.className = 'eb-color'
-    b.dataset.color = c
-    b.style.background = c
-    b.title = c
-    b.addEventListener('click', () => {
-      core.state.color = c
-      syncEditbar()
-    })
-    colorBtns.push(b)
-    ebToolsRow.appendChild(b)
-  }
-  const custom = document.createElement('input')
-  custom.type = 'color'
-  custom.className = 'eb-color-custom'
-  custom.title = '自定义颜色'
-  custom.addEventListener('input', () => {
-    core.state.color = custom.value
-    syncEditbar()
-  })
-  ebToolsRow.appendChild(custom)
-  const sep2 = document.createElement('span')
-  sep2.className = 'eb-sep'
-  ebToolsRow.appendChild(sep2)
-  const l1 = document.createElement('span')
-  l1.className = 'eb-label'
-  l1.textContent = '粗细'
-  ebToolsRow.appendChild(l1)
-  sizeInput = document.createElement('input')
-  sizeInput.type = 'range'
-  sizeInput.id = 'eb-size'
-  sizeInput.min = '1'
-  sizeInput.max = '20'
-  sizeInput.step = '1'
-  sizeInput.addEventListener('input', () => {
-    core.state.size = Number(sizeInput.value)
-  })
-  ebToolsRow.appendChild(sizeInput)
-  const l2 = document.createElement('span')
-  l2.className = 'eb-label'
-  l2.textContent = '字号'
-  ebToolsRow.appendChild(l2)
-  fontInput = document.createElement('input')
-  fontInput.type = 'number'
-  fontInput.id = 'eb-font'
-  fontInput.min = '12'
-  fontInput.max = '64'
-  fontInput.addEventListener('change', () => {
-    const v = Number(fontInput.value)
-    if (v >= 12 && v <= 64) core.state.fontSize = v
-  })
-  ebToolsRow.appendChild(fontInput)
+  syncInspector = mountInspector(document.querySelector('#overlay-inspector'), core)
   const sep3 = document.createElement('span')
   sep3.className = 'eb-sep'
   ebToolsRow.appendChild(sep3)
@@ -201,14 +144,11 @@ geometry.onsubmit = e => {
   lastOcr = ''; hidePanel(); closeGeometry(); enterEdit(); adjust.focus()
 }
 function syncEditbar() {
-  document.querySelector('#step-options').hidden = core.state.tool !== 'step'
-  document.querySelector('#step-hint').textContent = stepHint(core.state)
+  syncInspector?.()
+  anno.style.cursor = core.state.tool === 'select' ? 'move' : 'crosshair'
   adjust.disabled = !!(core.state.pendingStep || core.state.shapes.length || core.state.textEditing || core.state.redo.length)
   if (adjust.disabled) closeGeometry()
   for (const b of toolBtns) b.classList.toggle('is-active', b.dataset.tool === core.state.tool)
-  for (const b of colorBtns) b.classList.toggle('is-active', b.dataset.color === core.state.color)
-  if (sizeInput) sizeInput.value = String(core.state.size)
-  if (fontInput) fontInput.value = String(core.state.fontSize)
   if (undoBtn) undoBtn.disabled = !core.state.undo.length
   if (redoBtn) redoBtn.disabled = !core.state.redo.length
   const t = core.state.textEditing
@@ -665,7 +605,8 @@ ui.addEventListener('dblclick', () => {
 })
 
 // 标注画布接管指针事件（edit 态）
-anno.addEventListener('pointerdown', core.onPointerDown)
+anno.addEventListener('dblclick', core.editSelectedText)
+anno.addEventListener('pointerdown', e => { anno.focus({preventScroll:true}); core.onPointerDown(e) })
 anno.addEventListener('pointermove', core.onPointerMove)
 anno.addEventListener('pointerup', core.onPointerUp)
 anno.addEventListener('pointercancel', core.onPointerUp)
@@ -716,10 +657,6 @@ window.addEventListener('keydown', (e) => {
 document.querySelector('#eb-output').onclick = () => {
   if (!busyAction) chooseAppearance(core.exportScene(),core.state.appearance,core.setAppearance)
 }
-document.querySelector('#step-size').onchange = e => {
-  core.state.stepSize=Math.min(128,Math.max(12,e.target.valueAsNumber||26)); e.target.value=core.state.stepSize
-}
-document.querySelector('#step-text').onchange = e => {core.state.stepText=e.target.checked;core.cancelDraft()}
 ebCopy.addEventListener('click', doCopy)
 ebSave.addEventListener('click', doSave)
 ebPin.addEventListener('click', doPin)

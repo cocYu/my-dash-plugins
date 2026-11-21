@@ -1,7 +1,7 @@
 {
   "id": "screenshot-tool",
   "name": "截图",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "区域截图后就地标注/OCR/贴图/保存（Snipaste 式冻屏编辑）、选区滚动长截图（手动/自动翻页）、全局快捷键、全屏/窗口截图、标注（画笔/马赛克/文字/箭头/图形/高亮/步骤序号）、带壳截图、贴图置顶、OCR 文字提取与翻译、AI 识图（内置独立模型配置或复用主程序）、历史记录",
   "main": "index.js",
   "permissions": ["storage"],

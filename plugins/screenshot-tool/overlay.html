@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>区域截图</title>
-  <link rel="stylesheet" href="./appearance.css">
+  <link rel="stylesheet" href="./appearance.css"><link rel="stylesheet" href="./inspector.css">
 
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
@@ -50,16 +50,6 @@
       width: 30px; padding: 7px 0 !important; text-align: center; font-size: 14px !important;
     }
     .eb-tool.is-active { background: #1971c2 !important; color: #fff !important; }
-    .eb-color {
-      width: 18px; height: 18px; border-radius: 4px; padding: 0 !important;
-      border: 2px solid transparent; box-sizing: border-box;
-    }
-    .eb-color.is-active { border-color: #fff; }
-    .eb-color-custom { width: 22px; height: 22px; padding: 0; border: none; background: none; cursor: pointer; }
-    .eb-label { font-size: 12px; color: #999; margin: 0 2px 0 6px; }
-    #eb-size { width: 70px; accent-color: #1971c2; }
-    #eb-font { width: 44px; background: #232327; border: 1px solid rgba(255,255,255,0.15); color: #ddd;
-      border-radius: 4px; padding: 4px 4px; font-size: 12px; font-family: inherit; }
     #panel {
       position: fixed; right: 16px; bottom: 16px; z-index: 20; display: none;
       width: 380px; max-height: 60vh; flex-direction: column; gap: 8px;
@@ -105,7 +95,6 @@
     #panel-tr-row.show #panel-translate {display:block}
     #anno, #ui {touch-action:none}
     #selection-size {font:600 13px ui-monospace,monospace;color:#90e4d1}
-    #step-options:not([hidden]) {display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}
     #step-size {width:4em}
     #geometry:not([hidden]) {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
     #geometry input {width:5em;background:#22252a;color:white;border:1px solid #6b737d;border-radius:4px;padding:4px}
@@ -115,7 +104,7 @@
 <body>
   <canvas id="freeze"></canvas>
   <canvas id="ui"></canvas>
-  <canvas id="anno"></canvas>
+  <canvas id="anno" tabindex="0" aria-label="标注画布"></canvas>
   <div id="textbox"><input id="text-input" placeholder="输入文字，Enter 确认" /></div>
   <div id="tip" role="status">拖动选择截取区域 · Esc 取消 · 双击全屏</div>
   <div id="toolbar" class="bar">
@@ -130,8 +119,7 @@
       <button>应用</button>
     </form>
     <div class="eb-row" id="eb-tools"></div>
-    <div id="step-options" hidden><label>编号直径 <input id="step-size" type="number" min="12" max="128" value="26"> px</label>
-      <label><input id="step-text" type="checkbox"> 附带文字</label> <span id="step-hint" role="status"></span></div>
+    <div id="overlay-inspector"></div>
     <div class="eb-row">
       <button id="eb-copy" class="success" title="复制到剪贴板并关闭（Enter）">复制</button>
       <button id="eb-save" title="保存到设置目录（未设置则弹另存）">保存</button>

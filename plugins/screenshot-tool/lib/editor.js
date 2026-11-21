@@ -7,7 +7,8 @@
 // createEditor() 是主窗工作台用的 Vue 薄壳（工具栏 UI）；截图遮罩页（overlay.js）
 // 直接驱动核心，保证两处标注行为一致。
 
-import { drawStep, stepBounds, captionBox, stepHint } from './step.js'
+import { drawStep, stepBounds, captionBox } from './step.js'
+import { mountInspector } from './inspector.js'
 import { appearance, renderOutput } from './shell.js'
 import { canvasBytes } from './history.js'
 
@@ -15,7 +16,7 @@ let shapeSeq = 0
 const genShapeId = () => `sh-${Date.now().toString(36)}-${(shapeSeq++).toString(36)}`
 
 export const TOOLS = [
-  { id: 'select', name: '选择', glyph: '⬚' },
+  { id: 'select', name: '选择 / 移动', glyph: '移动' },
   { id: 'pen', name: '画笔', glyph: '✎' },
   { id: 'highlight', name: '高亮', glyph: '✏' },
   { id: 'line', name: '直线', glyph: '╱' },
@@ -27,8 +28,6 @@ export const TOOLS = [
   { id: 'mosaic', name: '马赛克', glyph: '▩' }
 ]
 
-export const COLORS = ['#e64545', '#f4a300', '#2f9e44', '#1971c2', '#9c36b5', '#111111', '#ffffff']
-
 export function createEditorState() {
   return {
     version: 0, // 兼容字段：旧版靠它建立响应依赖，现由 onChange 通知替代
@@ -38,7 +37,7 @@ export function createEditorState() {
     tool: 'pen',
     color: '#e64545',
     size: 4,
-    fontSize: 20,
+    fontSize: 20, block: 12,
     selectedId: null,
     textEditing: null, // {x, y, value}
     boundId: null, // 绑定的历史记录 id
@@ -50,6 +49,8 @@ export function createEditorState() {
   }
 }
 
+const textFont = s => `600 ${s.size}px "Microsoft YaHei", "PingFang SC", system-ui, sans-serif`
+
 function normRect(s) {
   const x = Math.min(s.x1, s.x2)
   const y = Math.min(s.y1, s.y2)
@@ -58,8 +59,8 @@ function normRect(s) {
   return { x, y, w, h }
 }
 
-function shapeBBox(s) {
-  const slack = (s.size || 4) + 6
+function shapeBBox(s, g) {
+  const slack = s.type === 'highlight' ? s.size * 3 + 6 : (s.size || 4) + 6
   switch (s.type) {
     case 'pen':
     case 'highlight': {
@@ -85,9 +86,11 @@ function shapeBBox(s) {
     }
     case 'text': {
       const lines = String(s.text).split('\n')
-      const w = Math.max(...lines.map((l) => l.length)) * s.size * 0.6 + 8
+      g.save(); g.font = textFont(s)
+      const w = Math.max(...lines.map(l => g.measureText(l).width)) + 8
+      g.restore()
       const h = lines.length * s.size * 1.5 + 8
-      return { x: s.x - 4, y: s.y - 4, w: w + slack, h: h + slack }
+      return { x: s.x - 4, y: s.y - 4, w, h }
     }
     case 'step':
       return stepBounds(s)
@@ -96,10 +99,23 @@ function shapeBBox(s) {
   }
 }
 
-function hitTest(shapes, x, y) {
+function hitTest(shapes, x, y, g) {
+  const inside = b => x >= b.x && x <= b.x+b.w && y >= b.y && y <= b.y+b.h
+  const near = (ax,ay,bx,by,tolerance) => {
+    const dx=bx-ax, dy=by-ay
+    const t=Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy || 1)))
+    return Math.hypot(x-ax-t*dx, y-ay-t*dy) <= tolerance
+  }
   for (let i = shapes.length - 1; i >= 0; i--) {
-    const b = shapeBBox(shapes[i])
-    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return shapes[i]
+    const s = shapes[i]
+    if (!inside(shapeBBox(s,g))) continue
+    if (s.type === 'line' || s.type === 'arrow') {
+      if (near(s.x1,s.y1,s.x2,s.y2,5+s.size/2)) return s
+    } else if (s.type === 'pen' || s.type === 'highlight') {
+      if (s.points.some(([px,py],j) => j && near(...s.points[j-1],px,py,5+s.size*(s.type === 'pen' ? .5 : 3)))) return s
+    } else if (s.type === 'step') {
+      if (Math.hypot(x-s.x,y-s.y) <= s.diameter/2+3 || (s.box && (inside(s.box) || near(s.x,s.y,s.tx,s.ty,5)))) return s
+    } else return s
   }
   return null
 }
@@ -236,7 +252,7 @@ function drawShape(g, s, base, draft = false) {
     }
     case 'text': {
       g.fillStyle = s.color
-      g.font = `600 ${s.size}px "Microsoft YaHei", "PingFang SC", system-ui, sans-serif`
+      g.font = textFont(s)
       g.textBaseline = 'top'
       const lines = String(s.text).split('\n')
       lines.forEach((line, i) => g.fillText(line, s.x, s.y + i * s.size * 1.5))
@@ -275,7 +291,7 @@ export function renderScene(g, base, shapes, selectedId = null) {
   if (selectedId) {
     const sel = shapes.find((s) => s.id === selectedId)
     if (sel) {
-      const b = shapeBBox(sel)
+      const b = shapeBBox(sel, g)
       g.save()
       g.strokeStyle = '#1971c2'
       g.lineWidth = 1.5
@@ -356,7 +372,7 @@ export function createEditorCore({ onChange } = {}) {
     const t = state.tool
     const common = { id: genShapeId(), color: state.color, size: state.size }
     if (t === 'select') {
-      const hit = hitTest(state.shapes, x, y)
+      const hit = hitTest(state.shapes, x, y, canvasEl.getContext('2d'))
       state.selectedId = hit ? hit.id : null
       if (hit) moving = { shape: hit, startX: x, startY: y, moved: false }
       bump()
@@ -380,7 +396,7 @@ export function createEditorCore({ onChange } = {}) {
     if (t === 'pen' || t === 'highlight') {
       draft = { ...common, type: t, points: [[x, y]] }
     } else if (t === 'mosaic') {
-      draft = { ...common, type: 'mosaic', x, y, w: 0, h: 0, block: 12, x1: x, y1: y }
+      draft = { ...common, type: 'mosaic', x, y, w: 0, h: 0, block: state.block, x1: x, y1: y }
     } else {
       draft = { ...common, type: t, x1: x, y1: y, x2: x, y2: y }
     }
@@ -394,6 +410,7 @@ export function createEditorCore({ onChange } = {}) {
     }
     if (moving) {
       const [x, y] = toImageCoords(e)
+      if (moving.startX === x && moving.startY === y) return
       if (!moving.moved) {
         checkpoint()
         const i = state.shapes.indexOf(moving.shape)
@@ -463,10 +480,45 @@ export function createEditorCore({ onChange } = {}) {
     }
   }
 
+  const selected = () => state.shapes.find(s => s.id === state.selectedId)
+  // Only the selected object changes; new-tool preferences remain independent.
+  const properties = () => {
+    const shape = selected(), type = shape?.type ?? state.tool
+    if (type === 'select') return {}
+    const [label,key,pref,min,max] = type === 'text' ? ['字号','size','fontSize',12,128]
+      : type === 'step' ? ['编号直径','diameter','stepSize',12,128]
+      : type === 'mosaic' ? ['颗粒','block','block',4,64] : ['粗细','size','size',1,20]
+    return {type,label,key,pref,min,max,value:shape?.[key] ?? state[pref],color:type === 'mosaic' ? null : shape?.color ?? state.color}
+  }
+  const changeProperty = (key, pref, value) => {
+    const shape = selected()
+    if (!shape) { state[pref] = value; bump(); return }
+    if (shape[key] === value) return
+    const changed = { ...shape, [key]:value }
+    if (changed.box && (key === 'text' || key === 'diameter')) {
+      changed.box = captionBox(canvasEl.getContext('2d'), changed, state.width, state.height)
+    }
+    checkpoint(); state.shapes[state.shapes.indexOf(shape)] = changed; state.dirty = true; bump()
+  }
+  const setMeasure = value => {
+    const p = properties()
+    if (p.key && Number.isFinite(value)) changeProperty(p.key,p.pref,Math.min(p.max,Math.max(p.min,Math.round(value))))
+  }
+  const setColor = color => {
+    if (properties().color && /^#[0-9a-f]{6}$/i.test(color)) changeProperty('color','color',color.toLowerCase())
+  }
+  const editSelectedText = () => {
+    const s = selected(); if (!s || !(s.type === 'text' || s.box)) return
+    state.textEditing = {id:s.id, x:s.box?.x ?? s.x, y:s.box?.y ?? s.y, value:s.text, step:s.type === 'step'}; bump()
+  }
   /** 提交进行中的文字输入（Enter/失焦时由壳层调用） */
   const commitText = () => {
     const t = state.textEditing
     state.textEditing = null
+    if (t?.id) {
+      if (selected()?.id === t.id && t.value.trim()) changeProperty('text',null,t.value)
+      bump(); return
+    }
     if (t?.step && state.pendingStep) {
       const step = state.pendingStep; state.pendingStep = null
       if (!t.value.trim()) { bump(); return }
@@ -520,6 +572,13 @@ export function createEditorCore({ onChange } = {}) {
     const tag = e.target?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
     if (!baseCanvas) return
+    const offsets = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]}
+    if (selected() && offsets[e.key] && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault(); const shape = selected(), changed = structuredClone(shape)
+      const [dx,dy] = offsets[e.key], step = e.shiftKey ? 10 : 1
+      translateShape(changed, dx*step, dy*step); checkpoint()
+      state.shapes[state.shapes.indexOf(shape)] = changed; state.dirty = true; bump(); return
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (state.selectedId) {
         e.preventDefault()
@@ -615,7 +674,8 @@ export function createEditorCore({ onChange } = {}) {
     redo: redoFn,
     clearShapes,
     removeSelected,
-    commitText, cancelDraft, selectTool, setAppearance, exportScene,
+    get selected() { return selected() }, get properties() { return properties() },
+    setColor, setMeasure, editSelectedText, commitText, cancelDraft, selectTool, setAppearance, exportScene,
     exportCanvas,
     exportBytes,
     get isEmpty() {
@@ -635,7 +695,7 @@ export function createEditorCore({ onChange } = {}) {
 export function createEditor(bundle) {
   const { vue, ui } = bundle
   const { h, ref, defineComponent, nextTick, onBeforeUnmount } = vue
-  const { ElButton, ElInputNumber, ElSlider, ElTooltip } = ui
+  const { ElButton, ElTooltip } = ui
 
   const version = ref(0)
   const trigger = () => { version.value++ }
@@ -664,6 +724,7 @@ export function createEditor(bundle) {
   const component = defineComponent({
     name: 'ScreenshotEditor',
     setup() {
+      let syncInspector
       // 生命周期必须在 setup() 内注册（工厂函数体里没有组件实例）
       onBeforeUnmount(() => {
         core.detach()
@@ -680,62 +741,7 @@ export function createEditor(bundle) {
           h('div', { class: 'st-ed-bar' }, [
             h('div', { class: 'st-ed-tools' }, TOOLS.map(toolBtn)),
             h('div', { class: 'st-ed-sep' }),
-            // 色板
-            h(
-              'div',
-              { class: 'st-ed-colors' },
-              COLORS.map((c) =>
-                h('button', {
-                  class: ['st-ed-color', s.color === c ? 'is-active' : ''],
-                  style: `background:${c}`,
-                  onClick: () => {
-                    s.color = c
-                    trigger()
-                  },
-                  title: c
-                })
-              ).concat([
-                h('input', {
-                  type: 'color',
-                  class: 'st-ed-color-custom',
-                  value: s.color,
-                  onInput: (e) => {
-                    s.color = e.target.value
-                    trigger()
-                  }
-                })
-              ])
-            ),
-            h('div', { class: 'st-ed-sep' }),
-            ...(s.tool !== 'step' ? [h('span', { class: 'st-ed-label' }, '粗细'),
-            h(ElSlider, {
-              class: 'st-ed-size',
-              min: 1,
-              max: 20,
-              step: 1,
-              modelValue: s.size,
-              'onUpdate:modelValue': (v) => {
-                s.size = v
-                trigger()
-              }
-            }),
-            h('span', { class: 'st-ed-label' }, '字号'),
-            h(ElInputNumber, {
-              class: 'st-ed-font',
-              size: 'small',
-              min: 12,
-              max: 64,
-              modelValue: s.fontSize,
-              'onUpdate:modelValue': (v) => {
-                s.fontSize = v
-                trigger()
-              }
-            }),
-            ] : [
-              h('label',{},['编号直径 ',h('input',{type:'number',min:12,max:128,value:s.stepSize,'aria-label':'编号直径',onChange:e=>{s.stepSize=Math.max(12,Math.min(128,Number(e.target.value)||26));e.target.value=s.stepSize;trigger()}}),' px']),
-              h('label',{},[h('input',{type:'checkbox',checked:s.stepText,onChange:e=>{s.stepText=e.target.checked;core.cancelDraft()}}),' 附带文字']),
-              h('span',{class:'st-hint',role:'status'},stepHint(s))]),
-            h('div', { class: 'st-ed-sep' }),
+            h('div', { onVnodeMounted:v => { syncInspector = mountInspector(v.el, core) }, onVnodeUpdated:() => syncInspector?.() }),
             h(ElButton, { size: 'small', disabled: !s.undo.length, onClick: core.undo }, () => '撤销'),
             h(ElButton, { size: 'small', disabled: !s.redo.length, onClick: core.redo }, () => '重做'),
             h(
@@ -756,7 +762,8 @@ export function createEditor(bundle) {
                   [
                     h('canvas', {
                       ref: setCanvas,
-                      class: 'st-ed-canvas',
+                      class: 'st-ed-canvas', style: {cursor:s.tool === 'select' ? 'move' : 'crosshair'},
+                      onDblclick:core.editSelectedText,
                       tabindex: 0, 'aria-label': '标注画布',
                       onPointerdown: e => { e.currentTarget.focus({preventScroll:true}); core.onPointerDown(e) },
                       onPointermove: core.onPointerMove,
