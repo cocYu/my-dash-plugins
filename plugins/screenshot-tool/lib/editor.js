@@ -277,7 +277,7 @@ function roundRectPath(g, x, y, w, h, r) {
   g.closePath()
 }
 
-/** 整场景渲染：底图 + 马赛克（先） + 其余形状（后） + 选中框 */
+/** 整场景渲染：底图 + 马赛克（先） + 其余形状（后） + 选中框。导出与烘焙层重建用 */
 export function renderScene(g, base, shapes, selectedId = null) {
   g.clearRect(0, 0, g.canvas.width, g.canvas.height)
   if (!base) return
@@ -288,18 +288,20 @@ export function renderScene(g, base, shapes, selectedId = null) {
   for (const s of shapes) {
     if (s.type !== 'mosaic') drawShape(g, s, base)
   }
-  if (selectedId) {
-    const sel = shapes.find((s) => s.id === selectedId)
-    if (sel) {
-      const b = shapeBBox(sel, g)
-      g.save()
-      g.strokeStyle = '#1971c2'
-      g.lineWidth = 1.5
-      g.setLineDash([6, 4])
-      g.strokeRect(b.x, b.y, b.w, b.h)
-      g.restore()
-    }
-  }
+  strokeSelectionBox(g, shapes, selectedId)
+}
+
+function strokeSelectionBox(g, shapes, selectedId) {
+  if (!selectedId) return
+  const sel = shapes.find((s) => s.id === selectedId)
+  if (!sel) return
+  const b = shapeBBox(sel, g)
+  g.save()
+  g.strokeStyle = '#1971c2'
+  g.lineWidth = 1.5
+  g.setLineDash([6, 4])
+  g.strokeRect(b.x, b.y, b.w, b.h)
+  g.restore()
 }
 
 // ---- 框架无关交互核心 ----
@@ -315,18 +317,48 @@ export function createEditorCore({ onChange } = {}) {
   let draft = null // 进行中的形状
   let moving = null // { shape, startX, startY }
   let rafPending = false
+  // ---- 烘焙层：底图 + 已提交形状只渲染一次（马赛克像素化等重活不进交互帧） ----
+  // 交互帧 = drawImage(baked) + 草稿/被移动形状 + 选中框，与大图尺寸基本无关
+  let baked = null
+  let bakedDirty = true
 
   const notify = () => {
     if (onChange) onChange()
   }
-  const bump = () => { notify(); scheduleRedraw() }
+  const bump = () => { bakedDirty = true; notify(); scheduleRedraw() }
+
+  /** 烘焙内容 = 全部形状，但被拖动中的形状除外（它在交互帧里实时画） */
+  const rebuildBaked = () => {
+    if (!baseCanvas) { baked = null; return }
+    if (!baked) baked = document.createElement('canvas')
+    if (baked.width !== state.width || baked.height !== state.height) {
+      baked.width = state.width
+      baked.height = state.height
+    }
+    const g = baked.getContext('2d')
+    const shapes = moving ? state.shapes.filter((s) => s !== moving.shape) : state.shapes
+    g.clearRect(0, 0, baked.width, baked.height)
+    g.drawImage(baseCanvas, 0, 0)
+    for (const s of shapes) {
+      if (s.type === 'mosaic') drawShape(g, s, baseCanvas)
+    }
+    for (const s of shapes) {
+      if (s.type !== 'mosaic') drawShape(g, s, baseCanvas)
+    }
+  }
 
   const redraw = () => {
     if (!canvasEl || !baseCanvas) return
+    if (bakedDirty || !baked) {
+      rebuildBaked()
+      bakedDirty = false
+    }
     const g = canvasEl.getContext('2d')
-    const transient = draft || state.pendingStep
-    const shapes = transient ? [...state.shapes, transient] : state.shapes
-    renderScene(g, baseCanvas, shapes, state.selectedId)
+    g.clearRect(0, 0, canvasEl.width, canvasEl.height)
+    if (baked) g.drawImage(baked, 0, 0)
+    const transient = moving?.shape || draft || state.pendingStep
+    if (transient) drawShape(g, transient, baseCanvas)
+    strokeSelectionBox(g, state.shapes, state.selectedId)
   }
 
   const scheduleRedraw = () => {

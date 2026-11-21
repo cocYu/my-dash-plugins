@@ -26,7 +26,19 @@ import { loadWindowSettings } from './lib/store.js'
 const PLUGIN_ID = location.hostname // plugin://<id>/overlay.html
 
 const freeze = document.getElementById('freeze')
-const ui = document.getElementById('ui')
+const shade = document.getElementById('shade')
+const shadeParts = {
+  t: document.getElementById('shade-t'),
+  b: document.getElementById('shade-b'),
+  l: document.getElementById('shade-l'),
+  r: document.getElementById('shade-r')
+}
+const selbox = document.getElementById('selbox')
+const selsize = document.getElementById('selsize')
+const magnifier = document.getElementById('magnifier')
+const magCanvas = document.getElementById('mag-canvas')
+const magColor = document.getElementById('mag-color')
+const magXy = document.getElementById('mag-xy')
 const anno = document.getElementById('anno')
 const tip = document.getElementById('tip')
 const editbar = document.getElementById('editbar')
@@ -181,11 +193,9 @@ textInput.addEventListener('blur', () => {
   if (core.state.textEditing) core.commitText()
 })
 
-// ---- 遮罩绘制 ----
+// ---- 遮罩与选区（DOM 分层：拖动只改几何样式，GPU 合成，无 canvas 重绘） ----
 
 function initUiCanvas() {
-  ui.width = window.innerWidth
-  ui.height = window.innerHeight
   sx = freezeC.width / window.innerWidth
   sy = freezeC.height / window.innerHeight
 }
@@ -196,40 +206,96 @@ function normSel(r) {
   return { x, y, w: Math.abs(r.x2 - r.x1), h: Math.abs(r.y2 - r.y1) }
 }
 
-function draw() {
-  const g = ui.getContext('2d')
-  g.clearRect(0, 0, ui.width, ui.height)
-  // 全屏压暗
-  g.fillStyle = 'rgba(0,0,0,0.32)'
-  g.fillRect(0, 0, ui.width, ui.height)
-  const r = phase === 'edit' ? (sel ? { x1: sel.x, y1: sel.y, x2: sel.x + sel.w, y2: sel.y + sel.h } : null) : rect
-  if (!r) return
-  const x = Math.min(r.x1, r.x2)
-  const y = Math.min(r.y1, r.y2)
-  const w = Math.abs(r.x2 - r.x1)
-  const h = Math.abs(r.y2 - r.y1)
-  // 选区挖亮
-  g.clearRect(x, y, w, h)
-  // 边框
-  g.strokeStyle = '#1971c2'
-  g.lineWidth = 1.5
-  g.strokeRect(x + 0.5, y + 0.5, w, h)
-  if (phase === 'select') {
-    // 四角锚点 + 尺寸提示
-    g.fillStyle = '#1971c2'
-    for (const [cx, cy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
-      g.fillRect(cx - 3, cy - 3, 6, 6)
-    }
-    const label = `${Math.round(w * sx)} × ${Math.round(h * sy)}`
-    g.font = '12px system-ui'
-    const tw = g.measureText(label).width
-    const lx = x + w / 2 - tw / 2 - 6
-    const ly = y > 28 ? y - 26 : y + h + 8
-    g.fillStyle = 'rgba(20,20,24,0.9)'
-    g.fillRect(lx, ly, tw + 12, 20)
-    g.fillStyle = '#eee'
-    g.fillText(label, lx + 6, ly + 14)
+/** 当前选区（屏幕逻辑坐标），select 态用拖拽 rect，edit 态用 sel */
+function currentRect() {
+  if (phase === 'edit') return sel
+  if (phase === 'select' && rect) return normSel(rect)
+  return null
+}
+
+/** 把遮罩四块 + 选区框 + 尺寸标签同步到 DOM（纯样式变更，交给合成器） */
+function syncSelectionDom() {
+  const r = currentRect()
+  const W = window.innerWidth
+  const H = window.innerHeight
+  if (!r || r.w < 1 || r.h < 1) {
+    // 无选区：整屏压暗
+    setShadeRect(0, 0, W, H)
+    selbox.style.display = 'none'
+    selsize.style.display = 'none'
+    return
   }
+  const x = Math.round(r.x)
+  const y = Math.round(r.y)
+  const w = Math.round(r.w)
+  const h = Math.round(r.h)
+  setShadeRect(x, y, w, h)
+  selbox.style.display = 'block'
+  selbox.style.left = `${x}px`
+  selbox.style.top = `${y}px`
+  selbox.style.width = `${w}px`
+  selbox.style.height = `${h}px`
+  const label = `${Math.round(w * sx)} × ${Math.round(h * sy)}`
+  if (selsize.textContent !== label) selsize.textContent = label
+  selsize.style.display = 'block'
+  const lw = selsize.offsetWidth || 90
+  const lx = Math.max(4, Math.min(x + w / 2 - lw / 2, W - lw - 4))
+  const ly = y > 30 ? y - 26 : y + h + 8
+  selsize.style.left = `${lx}px`
+  selsize.style.top = `${ly}px`
+}
+
+function setShadeRect(x, y, w, h) {
+  const W = window.innerWidth
+  const H = window.innerHeight
+  const st = shadeParts.t.style
+  const sb = shadeParts.b.style
+  const sl = shadeParts.l.style
+  const sr = shadeParts.r.style
+  st.left = '0px'; st.top = '0px'; st.width = W + 'px'; st.height = y + 'px'
+  sb.left = '0px'; sb.top = (y + h) + 'px'; sb.width = W + 'px'; sb.height = Math.max(0, H - y - h) + 'px'
+  sl.left = '0px'; sl.top = y + 'px'; sl.width = x + 'px'; sl.height = h + 'px'
+  sr.left = (x + w) + 'px'; sr.top = y + 'px'; sr.width = Math.max(0, W - x - w) + 'px'; sr.height = h + 'px'
+}
+
+// ---- 放大镜（select 态跟随光标：9×9 源像素 → 11 倍网格 + 坐标 + 颜色） ----
+
+const MAG_SRC = 9 // 取样半径内的源像素边长
+let magHex = '#000000'
+let magnifierForced = localStorage.getItem('st-magnifier') !== 'off'
+
+function updateMagnifier(cx, cy) {
+  if (phase !== 'select' || !magnifierForced) {
+    magnifier.style.display = 'none'
+    return
+  }
+  const px = Math.min(freezeC.width - 1, Math.max(0, Math.floor(cx * sx)))
+  const py = Math.min(freezeC.height - 1, Math.max(0, Math.floor(cy * sy)))
+  // 取样窗夹紧到图像内（避免边缘透明洞）
+  const sx0 = Math.max(0, Math.min(freezeC.width - MAG_SRC, px - 4))
+  const sy0 = Math.max(0, Math.min(freezeC.height - MAG_SRC, py - 4))
+  const g = magCanvas.getContext('2d')
+  g.imageSmoothingEnabled = false
+  g.clearRect(0, 0, magCanvas.width, magCanvas.height)
+  g.drawImage(freezeC, sx0, sy0, MAG_SRC, MAG_SRC, 0, 0, magCanvas.width, magCanvas.height)
+  // 中心像素高亮框（11 倍放大：每源像素 11px）
+  g.strokeStyle = 'rgba(255,255,255,0.9)'
+  g.lineWidth = 1
+  g.strokeRect((px - sx0) * 11 + 0.5, (py - sy0) * 11 + 0.5, 10, 10)
+  const d = freezeC.getContext('2d').getImageData(px, py, 1, 1).data
+  magHex = '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('')
+  magColor.style.background = magHex
+  magXy.textContent = `${px}, ${py}`
+  // 光标偏移摆放，靠边翻转
+  const mw = magnifier.offsetWidth || 120
+  const mh = magnifier.offsetHeight || 140
+  let mx = cx + 20
+  let my = cy + 20
+  if (mx + mw > window.innerWidth - 6) mx = cx - mw - 20
+  if (my + mh > window.innerHeight - 6) my = cy - mh - 20
+  magnifier.style.left = `${Math.max(4, mx)}px`
+  magnifier.style.top = `${Math.max(4, my)}px`
+  magnifier.style.display = 'block'
 }
 
 function placeEditbar() {
@@ -251,6 +317,10 @@ function enterEdit() {
   if (!rect) return
   phase = 'edit'
   sel = normSel(rect)
+  // 记住本次选区（R 键可回到上次框选位置，同 PixPin 选区历史）
+  try {
+    localStorage.setItem('st-last-sel', JSON.stringify({ x: sel.x, y: sel.y, w: sel.w, h: sel.h }))
+  } catch { /* 隐私模式等场景忽略 */ }
   selImg = imageBounds(sel, sx, sy, freezeC.width, freezeC.height)
   document.querySelector('#selection-size').textContent = `${selImg.w} × ${selImg.h} px`
   selK = selImg.w / sel.w
@@ -271,7 +341,7 @@ function enterEdit() {
   core.attach(anno)
   document.body.classList.add('editing')
   tip.style.display = 'none'
-  draw()
+  syncSelectionDom()
   editbar.style.display = 'flex'
   placeEditbar()
   syncEditbar()
@@ -293,7 +363,7 @@ function reselect() {
   editbar.style.display = 'none'
   tip.style.display = 'block'
   tip.textContent = '拖动选择新区域 · Esc 取消 · 双击全屏'
-  draw()
+  syncSelectionDom()
 }
 
 function selectAll() {
@@ -570,20 +640,41 @@ function showToast(msg) {
   toastEl.style.display = 'block'
 }
 
-// ---- 选择交互（select 态） ----
+// ---- 选择交互（select 态；事件挂在遮罩上，rAF 节流几何更新） ----
 
-ui.addEventListener('mousedown', (e) => {
-  if (phase !== 'select' || e.button !== 0) return
+let rafPending = false
+let lastPointer = null
+
+function scheduleSync(cx, cy) {
+  lastPointer = [cx, cy]
+  if (rafPending) return
+  rafPending = true
+  requestAnimationFrame(() => {
+    rafPending = false
+    syncSelectionDom()
+    if (lastPointer) updateMagnifier(lastPointer[0], lastPointer[1])
+  })
+}
+
+shade.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return
+  if (phase === 'edit') {
+    // 编辑态点选区外 = 重新框选
+    reselect()
+    return
+  }
+  if (phase !== 'select') return
   dragging = true
   rect = { x1: e.clientX, y1: e.clientY, x2: e.clientX, y2: e.clientY }
-  draw()
+  scheduleSync(e.clientX, e.clientY)
 })
 
-ui.addEventListener('mousemove', (e) => {
-  if (!dragging) return
-  rect.x2 = Math.max(0, Math.min(e.clientX, window.innerWidth))
-  rect.y2 = Math.max(0, Math.min(e.clientY, window.innerHeight))
-  draw()
+shade.addEventListener('mousemove', (e) => {
+  if (dragging) {
+    rect.x2 = Math.max(0, Math.min(e.clientX, window.innerWidth))
+    rect.y2 = Math.max(0, Math.min(e.clientY, window.innerHeight))
+  }
+  scheduleSync(e.clientX, e.clientY)
 })
 
 window.addEventListener('mouseup', () => {
@@ -593,13 +684,14 @@ window.addEventListener('mouseup', () => {
   const h = Math.abs(rect.y2 - rect.y1)
   if (w < 6 || h < 6) {
     rect = null
-    draw()
+    syncSelectionDom()
     return
   }
+  magnifier.style.display = 'none'
   enterEdit()
 })
 
-ui.addEventListener('dblclick', () => {
+shade.addEventListener('dblclick', () => {
   if (phase !== 'select') return
   selectAll()
 })
@@ -613,19 +705,100 @@ anno.addEventListener('pointercancel', core.onPointerUp)
 
 // ---- 键盘 ----
 
+/** 回到上次框选位置（PixPin 选区历史） */
+function applyLastSelection() {
+  if (phase !== 'select') return
+  try {
+    const s = JSON.parse(localStorage.getItem('st-last-sel') || 'null')
+    if (!s || s.w < 6 || s.h < 6) return
+    const W = window.innerWidth
+    const H = window.innerHeight
+    rect = {
+      x1: Math.max(0, Math.min(s.x, W - 6)),
+      y1: Math.max(0, Math.min(s.y, H - 6)),
+      x2: Math.max(6, Math.min(s.x + s.w, W)),
+      y2: Math.max(6, Math.min(s.y + s.h, H))
+    }
+    magnifier.style.display = 'none'
+    enterEdit()
+  } catch { /* 忽略坏数据 */ }
+}
+
+/** F5 重抓冻屏（选区保持，标注前的内容刷新） */
+async function refreshFrozenScreen() {
+  if (phase !== 'select') return
+  try {
+    const dataUrl = await window.api.capture.refreshOverlay()
+    if (!dataUrl) return
+    const image = new Image()
+    await new Promise((resolve, reject) => {
+      image.onload = resolve
+      image.onerror = reject
+      image.src = dataUrl
+    })
+    freezeC = document.createElement('canvas')
+    freezeC.width = image.naturalWidth
+    freezeC.height = image.naturalHeight
+    freezeC.getContext('2d').drawImage(image, 0, 0)
+    freeze.width = freezeC.width
+    freeze.height = freezeC.height
+    freeze.getContext('2d').drawImage(freezeC, 0, 0)
+    initUiCanvas()
+    if (lastPointer) updateMagnifier(lastPointer[0], lastPointer[1])
+    toast('画面已刷新')
+  } catch (err) {
+    toast(`刷新失败：${err.message}`)
+  }
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.isComposing || busyAction || document.querySelector('.st-output-dialog[open]')) return
   if (e.key !== 'Escape' && e.target.closest?.('input,textarea,button,select')) return
+  // Space 按住暂时隐藏所有浮层，查看被遮挡的内容（PixPin 行为）
+  if (e.key === ' ' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    document.body.classList.add('peek')
+    e.preventDefault()
+    return
+  }
+  if (e.key === 'Alt' && phase === 'select') {
+    magnifierForced = !magnifierForced
+    try { localStorage.setItem('st-magnifier', magnifierForced ? 'on' : 'off') } catch {}
+    if (lastPointer) scheduleSync(lastPointer[0], lastPointer[1])
+    return
+  }
   if (phase === 'select') {
     if (e.key === 'Enter') {
       selectAll()
     } else if (e.key === 'Escape') {
       void cancel()
+    } else if (e.key === 'F5') {
+      e.preventDefault()
+      void refreshFrozenScreen()
+    } else if (e.key === 'r' || e.key === 'R') {
+      applyLastSelection()
+    } else if ((e.key === 'c' || e.key === 'C') && magnifier.style.display === 'block') {
+      navigator.clipboard.writeText(magHex).then(() => toast(`已复制颜色 ${magHex}`)).catch(() => {})
     }
     return
   }
   if (phase !== 'edit') return
   if (core.state.textEditing) return // 文字输入框自行处理（已 stopPropagation，这里兜底）
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault()
+    void doSave()
+    return
+  }
+  if (mod && (e.key === 't' || e.key === 'T')) {
+    e.preventDefault()
+    void doPin()
+    return
+  }
+  if (e.key === 'F5') {
+    e.preventDefault()
+    toast('已开始标注，刷新仅在框选阶段可用')
+    return
+  }
   if (e.key === 'Escape') {
     if (core.state.pendingStep) { core.cancelDraft(); return }
     if (!geometry.hidden) { closeGeometry(); adjust.focus(); return }
@@ -650,6 +823,10 @@ window.addEventListener('keydown', (e) => {
     return
   }
   core.onKeydown(e)
+})
+
+window.addEventListener('keyup', (e) => {
+  if (e.key === ' ') document.body.classList.remove('peek')
 })
 
 // ---- 动作按钮 ----

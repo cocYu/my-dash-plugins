@@ -8,13 +8,40 @@
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
     body { background: #111; }
-    #freeze, #ui, #anno {
+    #freeze, #anno {
       position: fixed; inset: 0; width: 100vw; height: 100vh;
       display: none;
     }
     body.ready #freeze { display: block; }
-    body.ready #ui { display: block; cursor: crosshair; }
-    body.editing #ui { cursor: default; }
+    /* ---- 遮罩用 DOM 分层（拖动只改几何，GPU 合成零重绘） ---- */
+    #shade { position: fixed; inset: 0; display: none; z-index: 2; }
+    body.ready #shade { display: block; cursor: crosshair; }
+    body.editing #shade { cursor: default; }
+    #shade > div { position: fixed; background: rgba(0,0,0,0.32); }
+    #selbox {
+      position: fixed; display: none; pointer-events: none; z-index: 3;
+      border: 1.5px solid #1971c2; box-shadow: 0 0 0 1px rgba(255,255,255,0.35);
+    }
+    #selbox > i {
+      position: absolute; width: 7px; height: 7px; background: #1971c2;
+      border: 1px solid #fff; box-sizing: border-box;
+    }
+    #selsize {
+      position: fixed; display: none; pointer-events: none; z-index: 4;
+      background: rgba(20,20,24,0.9); color: #eee; font: 600 12px ui-monospace, monospace;
+      padding: 3px 8px; border-radius: 5px; white-space: nowrap;
+    }
+    #magnifier {
+      position: fixed; display: none; pointer-events: none; z-index: 6;
+      background: rgba(20,20,24,0.94); border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px; padding: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      font-family: ui-monospace, monospace;
+    }
+    #magnifier canvas { display: block; image-rendering: pixelated; border-radius: 4px; }
+    #mag-info { display: flex; gap: 8px; margin-top: 4px; font-size: 11px; color: #ddd; align-items: center; }
+    #mag-color { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.4); }
+    #mag-hint { color: #888; margin-left: auto; }
+    body.peek #editbar, body.peek #toolbar, body.peek #panel, body.peek #tip { display: none !important; }
     #anno {
       inset: auto; display: none; z-index: 5;
       cursor: crosshair; background: transparent;
@@ -93,7 +120,7 @@
     .bar button:focus-visible {outline:2px solid #78e0d3;outline-offset:2px}
     #panel {max-width:calc(100vw - 48px);overflow:auto}
     #panel-tr-row.show #panel-translate {display:block}
-    #anno, #ui {touch-action:none}
+    #anno {touch-action:none}
     #selection-size {font:600 13px ui-monospace,monospace;color:#90e4d1}
     #step-size {width:4em}
     #geometry:not([hidden]) {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -103,10 +130,20 @@
 </head>
 <body>
   <canvas id="freeze"></canvas>
-  <canvas id="ui"></canvas>
+  <div id="shade">
+    <div id="shade-t"></div><div id="shade-b"></div><div id="shade-l"></div><div id="shade-r"></div>
+  </div>
+  <div id="selbox"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div id="selsize"></div>
+  <div id="magnifier">
+    <canvas id="mag-canvas" width="99" height="99"></canvas>
+    <div id="mag-info">
+      <span id="mag-color"></span><span id="mag-xy"></span><span id="mag-hint">C 复制颜色</span>
+    </div>
+  </div>
   <canvas id="anno" tabindex="0" aria-label="标注画布"></canvas>
   <div id="textbox"><input id="text-input" placeholder="输入文字，Enter 确认" /></div>
-  <div id="tip" role="status">拖动选择截取区域 · Esc 取消 · 双击全屏</div>
+  <div id="tip" role="status">拖动框选 · R 上次选区 · F5 刷新画面 · 双击全屏 · Alt 切换放大镜 · Esc 取消</div>
   <div id="toolbar" class="bar">
     <button id="btn-full">全屏</button>
     <button id="btn-cancel">取消</button>
